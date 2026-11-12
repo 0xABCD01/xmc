@@ -29,7 +29,7 @@ import (
 	"xmanager_cloud/internal/grpcerr"
 	"xmanager_cloud/internal/logging"
 	"xmanager_cloud/internal/storage"
-	client "xmanager_cloud/internal/task_queue"
+	tq "xmanager_cloud/internal/task_queue"
 	"xmanager_cloud/internal/validator"
 	"xmanager_cloud/internal/workunit"
 )
@@ -40,7 +40,7 @@ const batchActuationCleanupTimeout = 10 * time.Second
 
 // BatchCreateWorkUnits creates the trials of a STUDY experiment for the study controller: it
 // validates every work unit against the study config, persists all of them in one transaction,
-// records one creation operation per work unit, and enqueues their creation tasks.
+// records one creation operation per work unit, and enqueues their creation tasks in one round trip.
 func (h *WorkUnitHandler) BatchCreateWorkUnits(ctx context.Context, req *msgpb.BatchCreateWorkUnitsRequest) (*msgpb.BatchCreateWorkUnitsResponse, error) {
 	ctx = logging.InjectOperation(ctx, "")
 	logging.Info(ctx, "Batch create work units", "parent", req.GetParent(), "count", len(req.GetRequests()))
@@ -153,8 +153,8 @@ func batchCreateError(err error) error {
 }
 
 // actuateCreatedWorkUnits records a creation operation for each created work unit and enqueues
-// their creation tasks. Work units whose operation or task cannot be created are compensated (see
-// compensateFailedWorkUnits) and named in the returned Internal error.
+// their creation tasks in one round trip. Work units whose operation or task cannot be created are
+// compensated (see compensateFailedWorkUnits) and named in the returned Internal error.
 func (h *WorkUnitHandler) actuateCreatedWorkUnits(ctx context.Context, xid int64, priority msgpb.Priority, created []*msgpb.WorkUnit, email string) error {
 	var failed []failedWorkUnit
 	var queued []createdWorkUnit
@@ -166,9 +166,13 @@ func (h *WorkUnitHandler) actuateCreatedWorkUnits(ctx context.Context, xid int64
 		}
 		queued = append(queued, cwu)
 	}
-	for _, cwu := range queued {
-		err := h.actuator.EnqueueWorkUnitTask(ctx, cwu.wu.GetCurrentWorkUnitExecution().GetName(), cwu.wu, client.CreateAction(priority, email), cwu.operation.GetName())
-		if err != nil {
+	tasks := make([]tq.WorkUnitTask, len(queued))
+	for i, cwu := range queued {
+		tasks[i] = tq.WorkUnitTask{Target: cwu.wu.GetCurrentWorkUnitExecution().GetName(), WorkUnit: cwu.wu, Action: tq.CreateAction(priority, email), OperationName: cwu.operation.GetName()}
+	}
+	results := h.actuator.EnqueueWorkUnitTasks(ctx, tasks)
+	for i, cwu := range queued {
+		if err := enqueueResult(results, i); err != nil {
 			failed = append(failed, failedWorkUnit{createdWorkUnit: cwu, cause: err})
 		}
 	}
@@ -177,6 +181,15 @@ func (h *WorkUnitHandler) actuateCreatedWorkUnits(ctx context.Context, xid int64
 	}
 	names := h.compensateFailedWorkUnits(ctx, xid, failed)
 	return fmt.Errorf("%d of %d work units were created but could not be scheduled, restart them: %s: %w", len(failed), len(created), strings.Join(names, ", "), grpcerr.ErrInternal)
+}
+
+// enqueueResult returns the enqueue error of task i from results. A task without a result fails
+// rather than being assumed enqueued; results beyond the tasks are ignored by the caller.
+func enqueueResult(results []error, i int) error {
+	if i >= len(results) {
+		return errors.New("no response from actuator")
+	}
+	return results[i]
 }
 
 // createdWorkUnit is a created work unit with its ID and creation operation, if any.
