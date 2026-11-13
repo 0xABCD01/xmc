@@ -62,6 +62,9 @@ type HelmComponentOptions struct {
 	ReleaseName string
 	// ChartPath specifies an optional explicit filesystem path to the component's Helm chart.
 	ChartPath string
+	// Profile is the Component's xmc.dev/profile label (ProfileLabel). It selects the embedded chart installed when no
+	// chart path applies; a missing or unknown profile selects DefaultProfile.
+	Profile string
 	// Enabled indicates whether the component should be enabled in the Helm release.
 	Enabled bool
 	// ImageTag specifies an optional container image tag override.

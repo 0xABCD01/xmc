@@ -187,6 +187,7 @@ First-party (1P) components are managed natively through XMC Helm charts. Rather
 | :--- | :--- |
 | `helm/helm_manager.go` | `HelmManager` interface, construction options, and the `Ensure`/`Delete`/`Purge`/`Orphan` lifecycle entry points. |
 | `helm/chart_resolver.go` | Per-component chart path resolution and validation. |
+| `helm/profile_charts.go` | Profile → embedded 1P chart registry (`ProfileCharts`, replaceable with `WithProfileCharts`) and profile resolution for the `xmc.dev/profile` label. |
 | `helm/component_values.go` | Read-modify-write of the `xmc-component-values` ConfigMap. |
 | `helm/release_executor.go` | Sync and async Helm upgrade/uninstall execution, the upgrade lock, and the debounced worker queue. |
 | `helm/release_health.go` | `ComponentHealth`, the deployed-verdict cache, and drift detection. |
@@ -205,7 +206,10 @@ First-party (1P) components are managed natively through XMC Helm charts. Rather
     3. `<baseChartPath>/components/<componentName>` (when `Chart.yaml` is present).
     4. `<baseChartPath>/<componentName>` (when `Chart.yaml` is present).
     5. `<baseChartPath>/<componentName>.tgz` (packaged component chart archive).
-    6. Fallback to `<baseChartPath>` (or embedded default chart if empty).
+    6. Fallback to `<baseChartPath>` (or, when empty, the embedded chart of the Component's profile; see below).
+- **Profile-Selected Embedded Charts (`ProfileCharts`)**:
+  - A resolved chart path (steps 1–6 with a non-empty result, including `--chart-path`) always wins, and the profile is ignored. Without a chart path, the bridge installs the 1P chart that the bridge binary embeds for the Component's profile, named by its `xmc.dev/profile` label (set by the profile meta-chart). A missing label, or one naming a profile the bridge does not embed, selects `stable-2026a`; a non-empty unknown label is logged at `WARN` with its raw value. When the profile embeds no chart for the component, the runner's default chart is used.
+  - The resolved profile is stored with the component's values in the `xmc-component-values` ConfigMap (top-level key `xmc.dev/profile`, never passed to Helm), so a change of only the label is a values change and survives bridge restarts. Because label edits do not bump `metadata.generation`, the reconciler also asks `HelmManager.ProfileDrifted` before skipping an already actuated component, so a label-only flip re-installs the release exactly once with the other profile's chart. Values stored before profiles existed count as `stable-2026a`.
 - **Cold-Start State Hydration (`HydrateFromCluster` & `HydrateComponentState`)**:
   - `HydrateFromCluster(ctx)` inspects the `xmc-component-values` ConfigMap in the target namespace once the bridge is elected leader (`NewHelmLeaderRunnable`) and restores `activeState` for all previously enabled components. It runs concurrently with the first reconciles, which hydrate their own component through `HydrateComponentState`; a torn-down component (`Delete1PComponent`, `Purge1PComponent`, `Orphan1PComponent`) stays recorded as inactive, so hydration never re-activates it while the other components are still hydrated.
   - `HydrateComponentState(ctx, ref, observedGeneration, crReady)` lazily reconciles in-memory `activeState` and `actuatedGenerations` from the `xmc-component-values` ConfigMap and the `Component` CR's `.status` (`observedGeneration` and `Ready=True` condition). This prevents redundant Helm release revision increments on cold start and ensures post-restart deactivation (`spec.enabled: false`) properly triggers `Delete1PComponent`.

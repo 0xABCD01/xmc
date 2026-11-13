@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/storage/driver"
 
 	"xmanager_cloud/internal/logging"
@@ -36,7 +37,9 @@ type upgradeRequest struct {
 	ref       ComponentRef
 	namespace string
 	chartPath string
-	values    map[string]any
+	// profile selects the embedded chart when chartPath is empty.
+	profile string
+	values  map[string]any
 	// seq identifies this enqueue in pendingUpgrades so only the latest request clears the in-flight marker.
 	seq uint64
 }
@@ -146,7 +149,7 @@ func (m *K8sHelmManager) registerProducer() bool {
 	return true
 }
 
-func (m *K8sHelmManager) triggerUpgrade(ctx context.Context, ref ComponentRef, values map[string]any) error {
+func (m *K8sHelmManager) triggerUpgrade(ctx context.Context, ref ComponentRef, profile string, values map[string]any) error {
 	if ref.Namespace == "" {
 		return m.failUpgrade(ref, errors.New("component namespace must not be empty"))
 	}
@@ -156,19 +159,19 @@ func (m *K8sHelmManager) triggerUpgrade(ctx context.Context, ref ComponentRef, v
 	if m.runner == nil {
 		return m.failUpgrade(ref, errors.New("helm action runner is uninitialized; cannot actuate release upgrade"))
 	}
-	resolvedChartPath := m.resolveChartPathForComponent(ref)
+	req := upgradeRequest{ref: ref, namespace: ref.Namespace, chartPath: m.resolveChartPathForComponent(ref), profile: profile, values: values}
 	if !m.registerProducer() {
 		return m.failUpgrade(ref, errManagerStopped)
 	}
 	defer m.producerWg.Done()
 
 	if m.syncExecution {
-		return m.executeSyncUpgrade(ctx, ref, ref.Namespace, resolvedChartPath, values)
+		return m.executeSyncUpgrade(ctx, req)
 	}
 	if err := ctx.Err(); err != nil {
 		return m.failUpgrade(ref, err)
 	}
-	return m.enqueueUpgrade(ctx, upgradeRequest{ref: ref, namespace: ref.Namespace, chartPath: resolvedChartPath, values: values})
+	return m.enqueueUpgrade(ctx, req)
 }
 
 // enqueueUpgrade hands req to the async worker and marks it pending until the worker records its outcome.
@@ -186,7 +189,8 @@ func (m *K8sHelmManager) enqueueUpgrade(ctx context.Context, req upgradeRequest)
 	}
 }
 
-func (m *K8sHelmManager) executeSyncUpgrade(ctx context.Context, ref ComponentRef, targetNamespace, chartPath string, values map[string]any) error {
+func (m *K8sHelmManager) executeSyncUpgrade(ctx context.Context, req upgradeRequest) error {
+	ref := req.ref
 	m.setUpgradeErr(ref, nil)
 	if err := m.acquireUpgradeLock(ctx); err != nil {
 		return m.failUpgrade(ref, err)
@@ -196,20 +200,30 @@ func (m *K8sHelmManager) executeSyncUpgrade(ctx context.Context, ref ComponentRe
 	if err := ctx.Err(); err != nil {
 		return m.failUpgrade(ref, err)
 	}
-	err := m.upgradeRelease(ctx, ComponentReleaseNameForRef(ref), targetNamespace, chartPath, values)
+	err := m.upgradeRelease(ctx, req)
 	m.setUpgradeErr(ref, err)
 	return err
 }
 
-// upgradeRelease loads the component chart at chartPath (nil selects the runner's default chart) and upgrades the
-// release with values. Callers must serialize release operations.
-func (m *K8sHelmManager) upgradeRelease(ctx context.Context, releaseName, namespace, chartPath string, values map[string]any) error {
-	chartObj, err := m.loadComponentChart(chartPath)
+// upgradeRelease upgrades req's release with its values. A resolved chart path wins: the chart is loaded from it.
+// Without one, the chart is the one req.profile embeds for the component, and when the profile embeds none, the
+// runner's default chart. Callers must serialize release operations.
+func (m *K8sHelmManager) upgradeRelease(ctx context.Context, req upgradeRequest) error {
+	releaseName := ComponentReleaseNameForRef(req.ref)
+	chartObj, err := m.requestChart(req, componentNameFromRelease(releaseName))
 	if err != nil {
 		return err
 	}
-	_, err = m.runner.Upgrade(ctx, releaseName, namespace, chartObj, values)
+	_, err = m.runner.Upgrade(ctx, releaseName, req.namespace, chartObj, req.values)
 	return err
+}
+
+// requestChart returns the chart to upgrade req's release with, or nil to use the runner's default chart.
+func (m *K8sHelmManager) requestChart(req upgradeRequest, componentName string) (*chart.Chart, error) {
+	if req.chartPath != "" {
+		return m.loadComponentChart(req.chartPath)
+	}
+	return m.profileCharts.componentChart(req.profile, componentName)
 }
 
 // uninstallRelease discards any queued async upgrade and uninstalls the component's Helm release under the upgrade
@@ -373,7 +387,7 @@ func (m *K8sHelmManager) executeComponentUpgrade(req upgradeRequest) {
 		m.finishUnstartedUpgrade(execCtx, req, execCtx.Err())
 		return
 	}
-	m.recordAsyncUpgrade(execCtx, req, m.upgradeRelease(execCtx, ComponentReleaseNameForRef(req.ref), req.namespace, req.chartPath, req.values))
+	m.recordAsyncUpgrade(execCtx, req, m.upgradeRelease(execCtx, req))
 }
 
 // finishUnstartedUpgrade drops req with errManagerStopped once the manager is stopping, and otherwise records err.

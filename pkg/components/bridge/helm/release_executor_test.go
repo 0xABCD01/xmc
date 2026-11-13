@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -307,6 +309,47 @@ func TestK8sHelmManager_ExecuteBatch_UpgradePanicUnlock(t *testing.T) {
 	})
 }
 
+// TestK8sHelmManager_ExecuteComponentUpgrade_SelectsChart verifies the chart an async upgrade request installs: a
+// resolved chart path wins over the profile; without one, the profile's embedded chart, and no chart (the runner's
+// default) when the profile embeds none.
+func TestK8sHelmManager_ExecuteComponentUpgrade_SelectsChart(t *testing.T) {
+	pathChartDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pathChartDir, "Chart.yaml"), []byte("apiVersion: v2\nname: path-chart\nversion: 1.0.0\n"), 0o644); err != nil {
+		t.Fatalf("failed to write Chart.yaml: %v", err)
+	}
+	tests := []struct {
+		name      string
+		component string
+		profile   string
+		chartPath string
+		wantChart string // empty means a nil chart is passed to the runner
+	}{
+		{name: "request profile embeds the chart", component: "ingestion-gateway", profile: "stable-test", wantChart: "ingestion-gateway-test"},
+		{name: "default profile embeds the chart", component: "ingestion-gateway", profile: DefaultProfile, wantChart: "ingestion-gateway"},
+		{name: "profile embeds no chart", component: "ray-operator", profile: "stable-test"},
+		{name: "chart path wins over the profile", component: "ingestion-gateway", profile: "stable-test", chartPath: pathChartDir, wantChart: "path-chart"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &mockHelmActionRunner{}
+			mgr := NewK8sHelmManager(fake.NewClientset(), "xmc", "xmanager-cloud", WithActionRunner(runner), WithSyncExecution(true), WithProfileCharts(testProfileCharts("ingestion-gateway-test")))
+			defer mgr.Close()
+			ref := ComponentRef{Namespace: "xmc", Name: tc.component}
+			mgr.executeComponentUpgrade(upgradeRequest{ref: ref, namespace: "xmc", chartPath: tc.chartPath, profile: tc.profile, seq: mgr.markUpgradePending(ref)})
+
+			runner.mu.Lock()
+			defer runner.mu.Unlock()
+			got := ""
+			if runner.lastChart != nil {
+				got = runner.lastChart.Name()
+			}
+			if runner.upgradeCalls != 1 || got != tc.wantChart {
+				t.Errorf("upgrade calls = %d, chart = %q; want 1 call with chart %q", runner.upgradeCalls, got, tc.wantChart)
+			}
+		})
+	}
+}
+
 func TestK8sHelmManager_Close_SynchronizesWithTriggerUpgrade(t *testing.T) {
 	client := fake.NewClientset()
 	runner := &mockHelmActionRunner{}
@@ -325,7 +368,7 @@ func TestK8sHelmManager_Close_SynchronizesWithTriggerUpgrade(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			ref := ComponentRef{Namespace: "xmc", Name: "comp"}
-			_ = mgr.triggerUpgrade(ctx, ref, map[string]any{"val": "test"})
+			_ = mgr.triggerUpgrade(ctx, ref, DefaultProfile, map[string]any{"val": "test"})
 		}()
 	}
 
@@ -335,7 +378,7 @@ func TestK8sHelmManager_Close_SynchronizesWithTriggerUpgrade(t *testing.T) {
 
 	// Any subsequent triggerUpgrade must return stopped error
 	ref := ComponentRef{Namespace: "xmc", Name: "comp-after-close"}
-	err := mgr.triggerUpgrade(ctx, ref, map[string]any{"val": 999})
+	err := mgr.triggerUpgrade(ctx, ref, DefaultProfile, map[string]any{"val": 999})
 	if err == nil {
 		t.Error("expected error from triggerUpgrade after Close, got nil")
 	}
@@ -361,7 +404,7 @@ func TestK8sHelmManager_TriggerUpgrade_ChannelSaturation_NoDeadlock(t *testing.T
 		go func() {
 			defer wg.Done()
 			ref := ComponentRef{Namespace: "xmc", Name: "comp"}
-			_ = mgr.triggerUpgrade(ctx, ref, map[string]any{"val": "saturated"})
+			_ = mgr.triggerUpgrade(ctx, ref, DefaultProfile, map[string]any{"val": "saturated"})
 		}()
 	}
 
@@ -509,7 +552,7 @@ func TestK8sHelmManager_TriggerUpgrade_EmptyReleaseName_ReturnsError(t *testing.
 	mgr := NewK8sHelmManager(client, "xmc", "xmanager-cloud", WithActionRunner(runner))
 
 	ref := ComponentRef{Namespace: "xmc", Name: ""}
-	err := mgr.triggerUpgrade(ctx, ref, nil)
+	err := mgr.triggerUpgrade(ctx, ref, DefaultProfile, nil)
 	if err == nil {
 		t.Fatal("expected error on triggerUpgrade with empty component name, got nil")
 	}
@@ -532,14 +575,14 @@ func TestK8sHelmManager_TriggerUpgrade_ContextCancellation_DuringLockAcquisition
 	cancel()
 
 	ref := ComponentRef{Namespace: "xmc", Name: "rod-data-provider"}
-	err := mgr.triggerUpgrade(cancelCtx, ref, map[string]any{"foo": "bar"})
+	err := mgr.triggerUpgrade(cancelCtx, ref, DefaultProfile, map[string]any{"foo": "bar"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled when acquiring lock with canceled context, got: %v", err)
 	}
 
 	mgr.releaseUpgradeLock()
 
-	if err := mgr.triggerUpgrade(ctx, ref, map[string]any{"foo": "bar"}); err != nil {
+	if err := mgr.triggerUpgrade(ctx, ref, DefaultProfile, map[string]any{"foo": "bar"}); err != nil {
 		t.Fatalf("expected upgrade to succeed after releasing lock, got: %v", err)
 	}
 }

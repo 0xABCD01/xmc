@@ -96,6 +96,14 @@ func loadChart(dir string) (*chart.Chart, error) {
 	return ch, nil
 }
 
+// ChartDir returns the directory of the profile meta-chart described by s; see chartDir.
+func ChartDir(t *testing.T, s Spec) string {
+	t.Helper()
+	dir, err := chartDir(s)
+	fatalOnError(t, err)
+	return dir
+}
+
 // LoadProfile loads a fresh copy of the profile meta-chart, which tests may modify in memory.
 func LoadProfile(t *testing.T, s Spec) *chart.Chart {
 	t.Helper()

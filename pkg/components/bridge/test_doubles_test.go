@@ -239,6 +239,11 @@ func (m *mockHelm) NeedsRepair(ref helm.ComponentRef, generation int64) bool {
 	return m != nil && m.repairNeeded && m.IsComponentActuated(ref, generation)
 }
 
+// ProfileDrifted reports whether profile differs from the profile of the last Ensure1PComponent call.
+func (m *mockHelm) ProfileDrifted(_ context.Context, _ helm.ComponentRef, profile string) bool {
+	return m != nil && m.ensureCalls > 0 && m.lastOpts.Profile != profile
+}
+
 func (m *mockHelm) RecordActuation(ref helm.ComponentRef, generation int64) {
 	if m == nil {
 		return

@@ -34,6 +34,8 @@ type FakeHelmManager struct {
 	UnhealthyReason string
 	// RepairNeeded marks component keys (ref.String()) whose actuated release must be re-applied; see NeedsRepair.
 	RepairNeeded map[string]bool
+	// Profiles records the profile of the last Ensure1PComponent call per component key (ref.String()).
+	Profiles map[string]string
 }
 
 var _ helm.HelmManager = (*FakeHelmManager)(nil)
@@ -68,6 +70,10 @@ func (f *FakeHelmManager) Ensure1PComponent(ctx context.Context, ref helm.Compon
 	}
 	f.ActiveComponents[ref.String()] = opts.Enabled
 	f.AppliedValues[ref.String()] = helm.BuildHelmValues(opts)
+	if f.Profiles == nil {
+		f.Profiles = make(map[string]string)
+	}
+	f.Profiles[ref.String()] = opts.Profile
 	delete(f.RepairNeeded, ref.String())
 	return nil
 }
@@ -181,6 +187,18 @@ func (f *FakeHelmManager) IsComponentActuated(ref helm.ComponentRef, generation 
 	}
 	gen, ok := f.ActuatedGenerations[ref.String()]
 	return ok && gen == generation && f.ActiveComponents[ref.String()]
+}
+
+// ProfileDrifted reports whether profile differs from the profile of the last Ensure1PComponent call for ref. Unlike
+// K8sHelmManager, it compares the raw profiles without resolving unknown ones to helm.DefaultProfile.
+func (f *FakeHelmManager) ProfileDrifted(_ context.Context, ref helm.ComponentRef, profile string) bool {
+	if f == nil {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.Profiles[ref.String()]
+	return ok && stored != profile
 }
 
 // NeedsRepair reports whether the component is marked in RepairNeeded and is active at the given actuated generation.

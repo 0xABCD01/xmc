@@ -1,0 +1,97 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package helm
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"strings"
+
+	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chart/loader"
+
+	stable2026a "xmanager_cloud/deploy/profiles/stable-2026a"
+	"xmanager_cloud/internal/logging"
+)
+
+const (
+	// ProfileLabel is the Component CR label naming the profile whose meta-chart rendered the Component.
+	ProfileLabel = "xmc.dev/profile"
+	// DefaultProfile serves the embedded charts of Components whose ProfileLabel is missing or names a profile the
+	// bridge does not embed.
+	DefaultProfile = "stable-2026a"
+)
+
+// ProfileCharts maps each profile name to the 1P component charts embedded for it, rooted at components/<name>/.
+type ProfileCharts map[string]fs.FS
+
+// defaultProfileCharts are the profiles embedded in the bridge binary. It is never modified; see WithProfileCharts.
+var defaultProfileCharts = ProfileCharts{
+	DefaultProfile: stable2026a.EmbeddedCharts,
+}
+
+// resolve returns profile when charts has an entry for it, and DefaultProfile otherwise. A non-empty profile without
+// an entry (an unknown or skewed xmc.dev/profile label) is logged at WARN with the raw value.
+func (charts ProfileCharts) resolve(ctx context.Context, profile string) string {
+	if _, ok := charts[profile]; ok {
+		return profile
+	}
+	if profile != "" {
+		logging.Warn(ctx, "Unknown component profile label; using the default profile's embedded charts", "label", profile, "defaultProfile", DefaultProfile)
+	}
+	return DefaultProfile
+}
+
+// componentChart loads the chart that the resolved profile embeds for componentName. It returns a nil chart when the
+// profile embeds no chart for the component.
+func (charts ProfileCharts) componentChart(profile, componentName string) (*chart.Chart, error) {
+	if !isSafeComponentSegment(componentName) {
+		return nil, nil
+	}
+	return loadEmbeddedChart(charts[profile], "components/"+componentName)
+}
+
+// loadEmbeddedChart loads the chart rooted at root in fsys, or returns a nil chart when fsys is nil or root does not
+// exist.
+func loadEmbeddedChart(fsys fs.FS, root string) (*chart.Chart, error) {
+	if fsys == nil {
+		return nil, nil
+	}
+	var files []*loader.BufferedFile
+	err := fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return walkErr
+		}
+		data, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return err
+		}
+		files = append(files, &loader.BufferedFile{Name: strings.TrimPrefix(p, root+"/"), Data: data})
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read embedded chart %q: %w", root, err)
+	}
+	ch, err := loader.LoadFiles(files)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load embedded chart %q: %w", root, err)
+	}
+	return ch, nil
+}

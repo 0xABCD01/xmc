@@ -783,7 +783,8 @@ func (r *Reconciler) ensure1PComponent(ctx context.Context, in ReconcileComponen
 		logging.Warn(ctx, "Failed to hydrate Helm state from cluster; continuing with CR status fallback", "name", in.Name, "namespace", in.Namespace, "err", err)
 	}
 	repair := r.helmManager.NeedsRepair(ref, in.Generation)
-	if !repair && r.helmManager.IsComponentActuated(ref, in.Generation) {
+	// A profile label change does not bump the generation, so it is checked separately.
+	if !repair && r.helmManager.IsComponentActuated(ref, in.Generation) && !r.helmManager.ProfileDrifted(ctx, ref, in.HelmOpts.Profile) {
 		logging.Debug(ctx, "1P component already actuated at current generation, skipping Helm upgrade", "name", in.Name, "generation", in.Generation)
 		return false, nil
 	}
@@ -945,6 +946,7 @@ func (r *Reconciler) ReconcileWithDependencies(ctx context.Context, obj *unstruc
 	}
 	spec, _, enabled := ParseSpecFromUnstructured(obj.Object["spec"])
 	opts := helm.ParseHelmComponentOptions(obj.GetName(), obj.GetNamespace(), obj.Object["spec"], spec)
+	opts.Profile = obj.GetLabels()[helm.ProfileLabel]
 	wopts := ParseWrapperRef(obj.Object["spec"], obj.GetNamespace())
 	return r.ReconcileComponent(ctx, ReconcileComponentInput{
 		Namespace:                  obj.GetNamespace(),

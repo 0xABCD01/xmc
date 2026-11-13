@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -891,7 +893,7 @@ func TestK8sHelmManager_EnsureEvictsSupersededAndBaseKeys(t *testing.T) {
 }
 
 // TestK8sHelmManager_ForgetComponentEvictsAllIncarnations verifies that ForgetComponent drops the state of every
-// incarnation, the base keys and the chart path override, leaving other components untouched.
+// incarnation, the base keys, the chart path override and the recorded profile, leaving other components untouched.
 func TestK8sHelmManager_ForgetComponentEvictsAllIncarnations(t *testing.T) {
 	mgr := NewK8sHelmManager(fake.NewClientset(), "xmc", "xmanager-cloud", WithActionRunner(&mockHelmActionRunner{}), WithSyncExecution(true))
 	defer mgr.Close()
@@ -902,7 +904,7 @@ func TestK8sHelmManager_ForgetComponentEvictsAllIncarnations(t *testing.T) {
 	for _, key := range []string{componentStateKey(ghost), componentStateKey(live), base, componentStateKey(keep)} {
 		seedIncarnationState(mgr, key)
 	}
-	mgr.recordChartPathOverride(live, "/charts/ingestion")
+	mgr.recordChartSelection(live, "/charts/ingestion", "stable-test")
 
 	mgr.ForgetComponent(live.Namespace, live.Name)
 
@@ -911,10 +913,11 @@ func TestK8sHelmManager_ForgetComponentEvictsAllIncarnations(t *testing.T) {
 	}
 	mgr.mu.RLock()
 	_, hasChartPath := mgr.componentChartPaths[base]
+	_, hasProfile := mgr.persistedProfiles[base]
 	_, hasBaseErr := mgr.upgradeErrs[base]
 	mgr.mu.RUnlock()
-	if hasChartPath || hasBaseErr {
-		t.Errorf("ForgetComponent kept base state: chartPath=%v upgradeErr=%v, want neither", hasChartPath, hasBaseErr)
+	if hasChartPath || hasProfile || hasBaseErr {
+		t.Errorf("ForgetComponent kept base state: chartPath=%v profile=%v upgradeErr=%v, want none", hasChartPath, hasProfile, hasBaseErr)
 	}
 	if got := incarnationStateKeys(mgr, keep.Namespace, keep.Name); len(got) != 1 {
 		t.Errorf("state keys of unrelated component %q = %v, want its single incarnation kept", keep.Name, got)
@@ -952,5 +955,112 @@ func TestK8sHelmManager_EnsureLogsMissingEnvWarningsOnlyOnUpgrade(t *testing.T) 
 	}
 	if got := strings.Count(buf.String(), "Default component image env var is not set"); got != 1 {
 		t.Errorf("steady-state image env warning count = %d, want 1", got)
+	}
+}
+
+// TestK8sHelmManager_EnsureReinstallsOnProfileChange verifies that a change of only the Component's profile (values
+// unchanged) re-installs the release with the newly selected profile's embedded chart, that the resolved profile is
+// stored with the values, and that an unknown profile counts as the default one.
+func TestK8sHelmManager_EnsureReinstallsOnProfileChange(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewClientset()
+	runner := &mockHelmActionRunner{}
+	mgr := NewK8sHelmManager(client, "xmc", "xmanager-cloud", WithActionRunner(runner), WithSyncExecution(true), WithProfileCharts(testProfileCharts("ingestion-gateway-test")))
+	defer mgr.Close()
+	ref := ComponentRef{Namespace: "xmc", Name: "ingestion-gateway"}
+
+	type outcome struct {
+		UpgradeCalls  int
+		Chart         string
+		StoredProfile string
+	}
+	steps := []struct {
+		profile string
+		want    outcome
+	}{
+		{profile: DefaultProfile, want: outcome{UpgradeCalls: 1, Chart: "ingestion-gateway", StoredProfile: DefaultProfile}},
+		{profile: DefaultProfile, want: outcome{UpgradeCalls: 1, Chart: "ingestion-gateway", StoredProfile: DefaultProfile}},
+		{profile: "stable-test", want: outcome{UpgradeCalls: 2, Chart: "ingestion-gateway-test", StoredProfile: "stable-test"}},
+		{profile: "stable-test", want: outcome{UpgradeCalls: 2, Chart: "ingestion-gateway-test", StoredProfile: "stable-test"}},
+		{profile: "", want: outcome{UpgradeCalls: 3, Chart: "ingestion-gateway", StoredProfile: DefaultProfile}},
+		{profile: "stable-unknown", want: outcome{UpgradeCalls: 3, Chart: "ingestion-gateway", StoredProfile: DefaultProfile}},
+	}
+	for i, step := range steps {
+		if err := mgr.Ensure1PComponent(ctx, ref, HelmComponentOptions{Ref: ref, Enabled: true, Profile: step.profile}); err != nil {
+			t.Fatalf("step %d: Ensure1PComponent(profile %q) failed: %v", i, step.profile, err)
+		}
+		runner.mu.Lock()
+		got := outcome{UpgradeCalls: runner.upgradeCalls, StoredProfile: storedProfile(ctx, t, client, ref)}
+		if runner.lastChart != nil {
+			got.Chart = runner.lastChart.Name()
+		}
+		runner.mu.Unlock()
+		if diff := cmp.Diff(step.want, got); diff != "" {
+			t.Errorf("step %d (profile %q): outcome mismatch (-want +got):\n%s", i, step.profile, diff)
+		}
+	}
+}
+
+// TestK8sHelmManager_ProfileDrifted verifies drift against the stored profile, including after a restart, when it is
+// hydrated from the values ConfigMap, and for values stored before profiles existed.
+func TestK8sHelmManager_ProfileDrifted(t *testing.T) {
+	ctx := context.Background()
+	ref := ComponentRef{Namespace: "xmc", Name: "ingestion-gateway"}
+	tests := []struct {
+		name         string
+		storedValues string // values JSON already in the ConfigMap when the manager starts; empty for none
+		ensure       string // profile passed to Ensure1PComponent before checking; empty to skip
+		profile      string
+		want         bool
+	}{
+		{name: "same profile after Ensure", ensure: "stable-test", profile: "stable-test", want: false},
+		{name: "label flipped after Ensure", ensure: "stable-test", profile: DefaultProfile, want: true},
+		{name: "unknown label resolves to the stored default", ensure: DefaultProfile, profile: "stable-2099z", want: false},
+		{name: "restart hydrates the stored profile", storedValues: `{"ingestionGatewayDeployment":{"enabled":true},"xmc.dev/profile":"stable-test"}`, profile: "stable-test", want: false},
+		{name: "restart detects a flip during downtime", storedValues: `{"ingestionGatewayDeployment":{"enabled":true},"xmc.dev/profile":"stable-test"}`, profile: DefaultProfile, want: true},
+		{name: "values stored without a profile count as default", storedValues: `{"ingestionGatewayDeployment":{"enabled":true}}`, profile: DefaultProfile, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := fake.NewClientset()
+			if tc.storedValues != "" {
+				seedComponentValues(ctx, t, client, ref, tc.storedValues)
+			}
+			mgr := NewK8sHelmManager(client, "xmc", "xmanager-cloud", WithActionRunner(&mockHelmActionRunner{}), WithSyncExecution(true), WithProfileCharts(testProfileCharts("ingestion-gateway-test")))
+			defer mgr.Close()
+			if err := mgr.HydrateFromCluster(ctx); err != nil {
+				t.Fatalf("HydrateFromCluster failed: %v", err)
+			}
+			if tc.ensure != "" {
+				if err := mgr.Ensure1PComponent(ctx, ref, HelmComponentOptions{Ref: ref, Enabled: true, Profile: tc.ensure}); err != nil {
+					t.Fatalf("Ensure1PComponent failed: %v", err)
+				}
+			}
+			if got := mgr.ProfileDrifted(ctx, ref, tc.profile); got != tc.want {
+				t.Errorf("ProfileDrifted(%q) = %v, want %v", tc.profile, got, tc.want)
+			}
+		})
+	}
+}
+
+// storedProfile returns the profile stored with ref's values in the values ConfigMap.
+func storedProfile(ctx context.Context, t *testing.T, client *fake.Clientset, ref ComponentRef) string {
+	t.Helper()
+	cm, err := client.CoreV1().ConfigMaps(ref.Namespace).Get(ctx, ComponentValuesConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get values ConfigMap: %v", err)
+	}
+	return extractProfileFromValuesJSON(cm.Data[componentValuesKey(ref.Name)])
+}
+
+// seedComponentValues creates the values ConfigMap holding rawJSON for ref, as a previous bridge would have left it.
+func seedComponentValues(ctx context.Context, t *testing.T, client *fake.Clientset, ref ComponentRef, rawJSON string) {
+	t.Helper()
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: ComponentValuesConfigMapName, Namespace: ref.Namespace},
+		Data:       map[string]string{componentValuesKey(ref.Name): rawJSON},
+	}
+	if _, err := client.CoreV1().ConfigMaps(ref.Namespace).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to seed values ConfigMap: %v", err)
 	}
 }
