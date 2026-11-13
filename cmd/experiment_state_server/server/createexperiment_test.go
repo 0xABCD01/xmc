@@ -654,3 +654,33 @@ func TestCreateExperiment_DefaultACLs(t *testing.T) {
 		})
 	}
 }
+
+func TestAssembleNewExperiment(t *testing.T) {
+	const name = "experiments/1"
+	req := &msgpb.Experiment{
+		Name:     "ignored",
+		Title:    "title",
+		Priority: 3,
+		Tags:     []string{"tag"},
+		Notes:    "notes",
+		Status:   &msgpb.ExperimentStatus{},
+	}
+	want := &msgpb.Experiment{
+		Name:           name,
+		Title:          "title",
+		Creator:        "user@example.com",
+		Status:         newExperimentStatus(name),
+		Priority:       3,
+		Tags:           []string{"tag"},
+		Notes:          "notes",
+		Resources:      []*msgpb.ResourceSet{},
+		ExperimentType: msgpb.Experiment_STANDARD,
+	}
+	got := assembleNewExperiment(name, "user@example.com", req)
+	if diff := cmp.Diff(want, got, protocmp.Transform(), protocmp.IgnoreFields(&msgpb.ExperimentStatus{}, "launch_id")); diff != "" {
+		t.Errorf("assembleNewExperiment() mismatch (-want +got):\n%s", diff)
+	}
+	if got.GetStatus().GetLaunchId() == "" {
+		t.Error("assembleNewExperiment() status has an empty launch_id, want a generated one")
+	}
+}
