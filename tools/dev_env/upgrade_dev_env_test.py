@@ -457,6 +457,18 @@ class TestStepSubprocesses(unittest.TestCase):
         parsed = upgrade_dev_env.parse_args(["--profile-values", "/tmp/pv.yaml"])
         self.assertEqual(parsed.profile_values, "/tmp/pv.yaml")
 
+    @mock.patch("tools.dev_env.upgrade_dev_env.run_pipeline")
+    @mock.patch("tools.dev_env.upgrade_dev_env.load_config")
+    def test_run_upgrade_threads_profile_into_config(
+        self, mock_load: mock.MagicMock, mock_pipeline: mock.MagicMock
+    ) -> None:
+        """--profile reaches the config; without it the profile stays unset (keep the installed one)."""
+        mock_load.return_value = self.config
+        for argv, want in (([], None), (["--profile", "stable-2026b"], "stable-2026b")):
+            with self.subTest(argv=argv):
+                upgrade_dev_env.run_upgrade(upgrade_dev_env.parse_args(argv))
+                self.assertEqual(mock_pipeline.call_args[0][1].component_profile, want)
+
     @mock.patch("tools.dev_env.upgrade_dev_env.log_error")
     @mock.patch(
         "tools.dev_env.upgrade_dev_env.verify_helm_min_version",
@@ -513,6 +525,8 @@ class TestStepSubprocesses(unittest.TestCase):
                 "--run-migrations",
                 "--profile-values",
                 "/tmp/my dir/profile values.yaml",
+                "--profile",
+                "stable-2026b",
                 "--start-from",
                 "app",
             ]
@@ -529,6 +543,7 @@ class TestStepSubprocesses(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("--run-migrations", out)
         self.assertIn("--profile-values '/tmp/my dir/profile values.yaml'", out)
+        self.assertIn("--profile stable-2026b", out)
         self.assertIn("--start-from app", out)
 
 

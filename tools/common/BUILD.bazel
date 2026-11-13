@@ -40,6 +40,7 @@ py_test(
     srcs = ["tool_utils_test.py"],
     data = [
         "//deploy/profiles/stable-2026a:chart",
+        "//deploy/profiles/stable-2026b:chart",
     ],
     imports = ["../.."],
     deps = [

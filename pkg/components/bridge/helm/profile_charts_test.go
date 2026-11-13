@@ -69,33 +69,53 @@ func TestProfileChartsResolve(t *testing.T) {
 
 func TestProfileChartsComponentChart(t *testing.T) {
 	charts := testProfileCharts("ingestion-gateway-test")
+	charts["stable-metadata-only"] = fstest.MapFS{}
 	tests := []struct {
-		name      string
-		profile   string
-		component string
-		wantChart string // empty means no embedded chart
+		name         string
+		profile      string
+		component    string
+		chartVersion string
+		wantChart    string // empty means no embedded chart
+		wantErr      bool
 	}{
 		{name: "default profile embeds ingestion-gateway", profile: DefaultProfile, component: "ingestion-gateway", wantChart: "ingestion-gateway"},
 		{name: "registered profile embeds its own chart", profile: "stable-test", component: "ingestion-gateway", wantChart: "ingestion-gateway-test"},
+		{name: "metadata-only entry falls back to the default profile", profile: "stable-metadata-only", component: "ingestion-gateway", wantChart: "ingestion-gateway"},
+		{name: "fallback with matching chartVersion", profile: "stable-metadata-only", component: "ingestion-gateway", chartVersion: "0.1.0", wantChart: "ingestion-gateway"},
+		{name: "fallback with mismatched chartVersion fails", profile: "stable-metadata-only", component: "ingestion-gateway", chartVersion: "0.2.0", wantErr: true},
+		{name: "own chart ignores chartVersion", profile: "stable-test", component: "ingestion-gateway", chartVersion: "9.9.9", wantChart: "ingestion-gateway-test"},
+		{name: "default profile ignores chartVersion", profile: DefaultProfile, component: "ingestion-gateway", chartVersion: "9.9.9", wantChart: "ingestion-gateway"},
 		{name: "component without embedded chart", profile: DefaultProfile, component: "ray-operator"},
-		{name: "profile without entry", profile: "stable-2099z", component: "ingestion-gateway"},
+		{name: "component without chart in either profile", profile: "stable-metadata-only", component: "ray-operator"},
 		{name: "path traversal component", profile: DefaultProfile, component: "../ingestion-gateway"},
 		{name: "empty component", profile: DefaultProfile, component: ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ch, err := charts.componentChart(tc.profile, tc.component)
-			if err != nil {
-				t.Fatalf("componentChart(%q, %q) failed: %v", tc.profile, tc.component, err)
+			ch, err := charts.componentChart(tc.profile, tc.component, tc.chartVersion)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("componentChart(%q, %q, %q) error = %v, wantErr %v", tc.profile, tc.component, tc.chartVersion, err, tc.wantErr)
 			}
 			got := ""
 			if ch != nil {
 				got = ch.Name()
 			}
 			if got != tc.wantChart {
-				t.Errorf("componentChart(%q, %q) chart = %q, want %q", tc.profile, tc.component, got, tc.wantChart)
+				t.Errorf("componentChart(%q, %q, %q) chart = %q, want %q", tc.profile, tc.component, tc.chartVersion, got, tc.wantChart)
 			}
 		})
+	}
+}
+
+// TestDefaultProfileCharts checks the embedded registry: stable-2026b is known and its metadata-only ingestion-gateway
+// entry resolves to the stable-2026a chart.
+func TestDefaultProfileCharts(t *testing.T) {
+	if got := defaultProfileCharts.resolve(context.Background(), "stable-2026b"); got != "stable-2026b" {
+		t.Errorf("resolve(stable-2026b) = %q, want stable-2026b", got)
+	}
+	ch, err := defaultProfileCharts.componentChart("stable-2026b", "ingestion-gateway", "0.1.0")
+	if err != nil || ch == nil || ch.Name() != "ingestion-gateway" {
+		t.Errorf("componentChart(stable-2026b, ingestion-gateway) = %v, %v; want the stable-2026a ingestion-gateway chart", ch, err)
 	}
 }
 

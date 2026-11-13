@@ -34,6 +34,7 @@ go_library(
     deps = [
         "//api/protos/components/v1alpha1",
         "//deploy/profiles/stable-2026a:stable2026a",
+        "//deploy/profiles/stable-2026b:stable2026b",
         "//internal/logging",
         "//pkg/components/naming",
         "@io_k8s_api//core/v1:core",

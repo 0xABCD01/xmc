@@ -1381,6 +1381,41 @@ image_tag: latest
             "Profile values file '/tmp/nonexistent-profile-values-1429.yaml' does not exist or is not a file."
         )
 
+    @patch("tools.dev_env.deploy_dev_env._print_deployment_summary")
+    @patch("tools.dev_env.deploy_dev_env._build_step_map", return_value={"verify": lambda: None})
+    @patch("tools.dev_env.deploy_dev_env.run_checks")
+    @patch("tools.dev_env.deploy_dev_env.load_and_validate_config")
+    def test_run_deployment_threads_profile_into_config(
+        self,
+        mock_load: MagicMock,
+        mock_checks: MagicMock,
+        _mock_steps: MagicMock,
+        _mock_summary: MagicMock,
+    ) -> None:
+        """--profile reaches the config; without it the profile stays unset (keep the installed one)."""
+        mock_load.return_value = DeploymentConfig(
+            project_id="p",
+            deployment_name="d",
+            region="r",
+            environment="e",
+            image_registry="reg",
+            image_tag="t",
+        )
+        base_argv = [
+            "-c",
+            "cfg.yaml",
+            "--dns-project",
+            "dp",
+            "--dns-zone",
+            "dz",
+            "--only",
+            "verify",
+        ]
+        for extra, want in (([], None), (["--profile", "stable-2026b"], "stable-2026b")):
+            with self.subTest(extra=extra):
+                deploy_dev_env.run_deployment(deploy_dev_env.parse_args(base_argv + extra))
+                self.assertEqual(mock_checks.call_args[0][0].component_profile, want)
+
     def test_build_resume_cmd_quotes_profile_values_and_rejects_removed_components_flags(self):
         parsed = deploy_dev_env.parse_args(
             [
@@ -1392,10 +1427,13 @@ image_tag: latest
                 "dns-zone",
                 "--profile-values",
                 "/tmp/my dir/profile values.yaml",
+                "--profile",
+                "stable-2026b",
             ]
         )
         cmd = deploy_dev_env._build_resume_cmd(parsed, "app")
         self.assertIn("--profile-values '/tmp/my dir/profile values.yaml' ", cmd)
+        self.assertIn("--profile stable-2026b ", cmd)
         self.assertTrue(cmd.endswith("--start-from app"))
 
         for flag in ("--enable-components", "--no-enable-components"):

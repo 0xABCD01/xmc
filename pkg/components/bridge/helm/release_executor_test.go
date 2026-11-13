@@ -368,7 +368,7 @@ func TestK8sHelmManager_Close_SynchronizesWithTriggerUpgrade(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			ref := ComponentRef{Namespace: "xmc", Name: "comp"}
-			_ = mgr.triggerUpgrade(ctx, ref, DefaultProfile, map[string]any{"val": "test"})
+			_ = mgr.triggerUpgrade(ctx, ref, HelmComponentOptions{}, map[string]any{"val": "test"})
 		}()
 	}
 
@@ -378,7 +378,7 @@ func TestK8sHelmManager_Close_SynchronizesWithTriggerUpgrade(t *testing.T) {
 
 	// Any subsequent triggerUpgrade must return stopped error
 	ref := ComponentRef{Namespace: "xmc", Name: "comp-after-close"}
-	err := mgr.triggerUpgrade(ctx, ref, DefaultProfile, map[string]any{"val": 999})
+	err := mgr.triggerUpgrade(ctx, ref, HelmComponentOptions{}, map[string]any{"val": 999})
 	if err == nil {
 		t.Error("expected error from triggerUpgrade after Close, got nil")
 	}
@@ -404,7 +404,7 @@ func TestK8sHelmManager_TriggerUpgrade_ChannelSaturation_NoDeadlock(t *testing.T
 		go func() {
 			defer wg.Done()
 			ref := ComponentRef{Namespace: "xmc", Name: "comp"}
-			_ = mgr.triggerUpgrade(ctx, ref, DefaultProfile, map[string]any{"val": "saturated"})
+			_ = mgr.triggerUpgrade(ctx, ref, HelmComponentOptions{}, map[string]any{"val": "saturated"})
 		}()
 	}
 
@@ -552,7 +552,7 @@ func TestK8sHelmManager_TriggerUpgrade_EmptyReleaseName_ReturnsError(t *testing.
 	mgr := NewK8sHelmManager(client, "xmc", "xmanager-cloud", WithActionRunner(runner))
 
 	ref := ComponentRef{Namespace: "xmc", Name: ""}
-	err := mgr.triggerUpgrade(ctx, ref, DefaultProfile, nil)
+	err := mgr.triggerUpgrade(ctx, ref, HelmComponentOptions{}, nil)
 	if err == nil {
 		t.Fatal("expected error on triggerUpgrade with empty component name, got nil")
 	}
@@ -575,14 +575,14 @@ func TestK8sHelmManager_TriggerUpgrade_ContextCancellation_DuringLockAcquisition
 	cancel()
 
 	ref := ComponentRef{Namespace: "xmc", Name: "rod-data-provider"}
-	err := mgr.triggerUpgrade(cancelCtx, ref, DefaultProfile, map[string]any{"foo": "bar"})
+	err := mgr.triggerUpgrade(cancelCtx, ref, HelmComponentOptions{}, map[string]any{"foo": "bar"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled when acquiring lock with canceled context, got: %v", err)
 	}
 
 	mgr.releaseUpgradeLock()
 
-	if err := mgr.triggerUpgrade(ctx, ref, DefaultProfile, map[string]any{"foo": "bar"}); err != nil {
+	if err := mgr.triggerUpgrade(ctx, ref, HelmComponentOptions{}, map[string]any{"foo": "bar"}); err != nil {
 		t.Fatalf("expected upgrade to succeed after releasing lock, got: %v", err)
 	}
 }

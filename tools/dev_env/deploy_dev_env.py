@@ -35,6 +35,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.common.tool_utils import (  # noqa: E402
+    COMPONENT_PROFILES,
+    DEFAULT_COMPONENT_PROFILE,
     GREEN,
     NC,
     RED,
@@ -112,6 +114,16 @@ def parse_args(args: list[str]) -> argparse.Namespace:
         "--profile-values",
         default=None,
         help="Optional values YAML file passed to helm -f when deploying xmc-profile.",
+    )
+    p.add_argument(
+        "--profile",
+        dest="component_profile",
+        choices=COMPONENT_PROFILES,
+        default=None,
+        help=(
+            "Component profile deployed as xmc-profile (default: the installed profile, "
+            f"or {DEFAULT_COMPONENT_PROFILE} on a fresh install)."
+        ),
     )
     parsed_args = p.parse_args(args)
     if parsed_args.start_from and parsed_args.only:
@@ -866,6 +878,8 @@ def _build_resume_cmd(args: argparse.Namespace, current_step: str) -> str:
         resume_cmd += "--skip-verification "
     if getattr(args, "profile_values", None):
         resume_cmd += f"--profile-values {shlex.quote(args.profile_values)} "
+    if getattr(args, "component_profile", None):
+        resume_cmd += f"--profile {shlex.quote(args.component_profile)} "
     if args.only:
         resume_cmd += f"--only {current_step}"
     else:
@@ -893,6 +907,8 @@ def run_deployment(args: argparse.Namespace) -> None:
     config = load_and_validate_config(args.config)
     if getattr(args, "profile_values", None):
         config = replace(config, profile_values=args.profile_values)
+    if getattr(args, "component_profile", None):
+        config = replace(config, component_profile=args.component_profile)
 
     run_checks(config, args.dns_project, args.dns_zone)
     step_map = _build_step_map(args, config)

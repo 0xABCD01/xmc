@@ -29,6 +29,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.common.tool_utils import (  # noqa: E402
+    COMPONENT_PROFILES,
+    DEFAULT_COMPONENT_PROFILE,
     ensure_venv,
     log_error,
 )
@@ -297,12 +299,27 @@ def _add_common_config_flags(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_component_profile_flag(p: argparse.ArgumentParser) -> None:
+    """Configures the --profile flag of commands that deploy the xmc-profile release."""
+    p.add_argument(
+        "--profile",
+        dest="component_profile",
+        choices=COMPONENT_PROFILES,
+        default=None,
+        help=(
+            "Component profile deployed as xmc-profile (default: the installed profile, "
+            f"or {DEFAULT_COMPONENT_PROFILE} on a fresh install)."
+        ),
+    )
+
+
 def _add_deploy_flags(p: argparse.ArgumentParser, *, is_gke: bool) -> None:
     """Configures CLI flags for deployment commands."""
     if not is_gke:
         p.add_argument("-t", "--target", choices=["gke"], default="gke", help="Deployment target.")
     p.add_argument("-c", "--config", required=is_gke, help="Path to deployment YAML config.")
     _add_common_config_flags(p)
+    _add_component_profile_flag(p)
     p.add_argument("--dns-project", required=is_gke, help="GCP Project ID hosting DNS zone.")
     p.add_argument("--dns-zone", required=is_gke, help="Cloud DNS Managed Zone name.")
     p.add_argument(
@@ -326,6 +343,7 @@ def _add_upgrade_flags(p: argparse.ArgumentParser, *, is_gke: bool) -> None:
         p.add_argument("-t", "--target", choices=["gke"], default="gke", help="Upgrade target.")
     p.add_argument("-c", "--config", default=upgrade_dev_env.DEFAULT_CONFIG, help="Config path.")
     _add_common_config_flags(p)
+    _add_component_profile_flag(p)
     p.add_argument("--run-migrations", action="store_true", help="Run pending migrations.")
     group = p.add_mutually_exclusive_group()
     group.add_argument("-s", "--start-from", choices=upgrade_dev_env.STEPS, help="Start from step.")

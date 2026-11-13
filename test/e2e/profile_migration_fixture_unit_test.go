@@ -97,7 +97,7 @@ func baseProfileComponent(name string) map[string]any {
 }
 
 func TestApplyProfileOverlay(t *testing.T) {
-	overlay := profileOverlay{Profile: "stable-2026b", ImageTag: "2.53", ChartVersions: map[string]string{"clickhouse": "0.2.0"}}
+	overlay := profileOverlay{Profile: "stable-2099z", ImageTag: "2.53", ChartVersions: map[string]string{"clickhouse": "0.2.0"}}
 	tests := []struct {
 		name    string
 		objs    []map[string]any
@@ -109,7 +109,7 @@ func TestApplyProfileOverlay(t *testing.T) {
 			objs: []map[string]any{baseProfileComponent("clickhouse")},
 			want: []map[string]any{{
 				"apiVersion": "xmc.dev/v1alpha1", "kind": "Component",
-				"metadata": map[string]any{"name": "clickhouse", "labels": map[string]any{profileLabel: "stable-2026b", "app.kubernetes.io/name": "clickhouse"}},
+				"metadata": map[string]any{"name": "clickhouse", "labels": map[string]any{profileLabel: "stable-2099z", "app.kubernetes.io/name": "clickhouse"}},
 				"spec":     map[string]any{"enabled": true, "version": "0.2.0", "chartVersion": "0.2.0"},
 			}},
 		},
@@ -130,7 +130,7 @@ func TestApplyProfileOverlay(t *testing.T) {
 
 func TestApplyProfileOverlayKeepsInput(t *testing.T) {
 	objs := []map[string]any{baseProfileComponent("clickhouse")}
-	if _, err := applyProfileOverlay(objs, profileOverlay{Profile: "stable-2026b", ChartVersions: map[string]string{"clickhouse": "0.2.0"}}); err != nil {
+	if _, err := applyProfileOverlay(objs, profileOverlay{Profile: "stable-2099z", ChartVersions: map[string]string{"clickhouse": "0.2.0"}}); err != nil {
 		t.Fatalf("applyProfileOverlay() unexpected error: %v", err)
 	}
 	if diff := cmp.Diff([]map[string]any{baseProfileComponent("clickhouse")}, objs); diff != "" {

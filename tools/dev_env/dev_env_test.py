@@ -743,6 +743,15 @@ class DevEnvCliTest(unittest.TestCase):
         )
         self.assertEqual(parsed_deploy.profile_values, "/tmp/pv.yaml")
 
+    def test_parser_profile_flag(self) -> None:
+        """Verifies --profile accepts shipped profiles, defaults to unset and rejects others."""
+        self.assertIsNone(self.parser.parse_args(["gke-upgrade"]).component_profile)
+        parsed = self.parser.parse_args(["gke-upgrade", "--profile", "stable-2026b"])
+        self.assertEqual(parsed.component_profile, "stable-2026b")
+        with patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
+            self.parser.parse_args(["gke-upgrade", "--profile", "stable-2099z"])
+        self.assertFalse(hasattr(self.parser.parse_args(["spanner"]), "component_profile"))
+
     @patch("tools.dev_env.dev_env.ensure_venv")
     def test_removed_metrics_and_components_cli_flags_rejected(self, _mock_venv: MagicMock) -> None:
         """Verifies removed --enable-metrics and --enable-components CLI flags exit 2 via argparse."""
