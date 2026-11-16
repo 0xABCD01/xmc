@@ -94,12 +94,7 @@ class GitDiscoveryTest(unittest.TestCase):
             (root / "sub" / "vars.tf").write_text("", encoding="utf-8")
             (root / "node_modules").mkdir()
             (root / "node_modules" / "skip.tf").write_text("", encoding="utf-8")
-            orig = os.getcwd()
-            try:
-                os.chdir(root)
-                found = gates.walk_repo_files([".", "missing"], suffixes=(".tf",))
-            finally:
-                os.chdir(orig)
+            found = gates.walk_repo_files([".", "missing"], suffixes=(".tf",), base_dir=root)
         self.assertEqual(found, ["main.tf", "sub/vars.tf"])
 
         with (
@@ -128,41 +123,37 @@ class GitDiscoveryTest(unittest.TestCase):
 
 
 class ToolResolutionTest(unittest.TestCase):
-    def test_resolve_binary_and_docker_fallback(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tool = Path(tmpdir) / "mytool"
-            tool.write_text("#!/bin/sh\n", encoding="utf-8")
-            tool.chmod(0o755)
-            subdir = Path(tmpdir) / "adir"
-            subdir.mkdir()
-            subdir.chmod(0o755)
-            with mock.patch.object(gates.shutil, "which", return_value=None):
-                self.assertEqual(gates.resolve_binary("mytool", [Path(tmpdir)]), str(tool))
-                self.assertIsNone(gates.resolve_binary("adir", [Path(tmpdir)]))
-                self.assertIsNone(gates.resolve_binary("missing", [Path(tmpdir)]))
-
+    def test_docker_fallback_and_entrypoint(self):
         ctx = gates.RunContext(mode="check")
-        with (
-            mock.patch.object(gates, "resolve_binary", return_value=None),
-            mock.patch.object(gates.shutil, "which", return_value="/usr/bin/docker"),
-            mock.patch.object(gates.os, "getuid", return_value=1000),
-            mock.patch.object(gates.os, "getgid", return_value=1000),
+        with mock.patch.object(
+            gates.shutil,
+            "which",
+            side_effect=lambda name: "/usr/local/bin/terraform" if name == "terraform" else None,
+        ):
+            local_res = gates.resolve_local_or_docker(
+                ctx, "terraform", docker_image="tf:latest", mount="/workspace", missing_label="skip"
+            )
+        self.assertEqual(local_res, (["/usr/local/bin/terraform"], False))
+
+        with mock.patch.object(
+            gates.shutil,
+            "which",
+            side_effect=lambda name: "/usr/bin/docker" if name == "docker" else None,
         ):
             res = gates.resolve_local_or_docker(
                 ctx,
-                "ruff",
-                docker_image="ruff:latest",
-                mount="/io",
+                "tflint",
+                docker_image="tflint:latest",
+                mount="/data",
                 missing_label="skip",
-                as_user=True,
                 entrypoint="sh",
             )
             assert res is not None
             self.assertTrue(res[1])
+            self.assertIn(f"{gates.REPO_ROOT}:/data", res[0])
             self.assertIn("--entrypoint", res[0])
 
         with (
-            mock.patch.object(gates, "resolve_binary", return_value=None),
             mock.patch.object(gates.shutil, "which", return_value=None),
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):

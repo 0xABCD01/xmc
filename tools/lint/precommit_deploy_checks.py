@@ -55,6 +55,7 @@ def check_terraform(ctx: gates.RunContext) -> None:
         fix_args=["fmt", *files],
         failure_msg="Terraform formatting check failed.",
         ignore_fix_error=True,
+        cwd=gates.REPO_ROOT,
     )
 
 
@@ -79,9 +80,9 @@ def check_tflint(ctx: gates.RunContext) -> None:
     if is_docker:
         cmd = [*base, "-c", "tflint --init >/dev/null 2>&1 && tflint --recursive"]
     else:
-        gates.exec_cmd([*base, "--init"], quiet_out=True, quiet_err=True)
+        gates.exec_cmd([*base, "--init"], cwd=gates.REPO_ROOT, quiet_out=True, quiet_err=True)
         cmd = [*base, "--recursive"]
-    if gates.exec_cmd(cmd).returncode != 0:
+    if gates.exec_cmd(cmd, cwd=gates.REPO_ROOT).returncode != 0:
         ctx.fail("TFLint check failed.")
 
 
@@ -97,7 +98,7 @@ def check_helm(ctx: gates.RunContext) -> None:
     if ctx.mode == "check" or gates.staged_paths_match("AMD", r"^deploy/helm/"):
         if shutil.which("helm"):
             print("--> Running Helm Chart Linter (helm lint)...")
-            if gates.exec_cmd(["helm", "lint", "deploy/helm"]).returncode != 0:
+            if gates.exec_cmd(["helm", "lint", "deploy/helm"], cwd=gates.REPO_ROOT).returncode != 0:
                 ctx.fail("Helm lint failed.")
         else:
             ctx.warn_missing("helm not found. Helm chart linting skipped.")
@@ -119,6 +120,7 @@ def check_helm(ctx: gates.RunContext) -> None:
                 "--pattern",
                 "*_test.py",
             ],
+            cwd=gates.REPO_ROOT,
             env=env,
         ).returncode
         != 0
@@ -146,7 +148,7 @@ def check_security(ctx: gates.RunContext) -> None:
         return
     print("--> Running Infrastructure & Workload Security Scanner (Trivy)...")
     cmd = [*resolved[0], "config", "--skip-check-update", "--severity", "HIGH,CRITICAL", "deploy/"]
-    if gates.exec_cmd(cmd).returncode != 0:
+    if gates.exec_cmd(cmd, cwd=gates.REPO_ROOT).returncode != 0:
         ctx.fail("Trivy security check failed.")
 
 

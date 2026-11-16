@@ -156,20 +156,21 @@ def walk_repo_files(
     roots: Sequence[str],
     *,
     suffixes: tuple[str, ...] = (),
-    exact_names: tuple[str, ...] = (),
     excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
+    base_dir: Path = REPO_ROOT,
 ) -> list[str]:
-    """Walks `roots` and returns sorted paths matching `suffixes` or `exact_names`."""
+    """Walks `roots` relative to `base_dir` and returns sorted matching paths."""
     matched: list[str] = []
     for root in roots:
-        if not os.path.exists(root):
+        root_path = base_dir if root == "." else base_dir / root
+        if not root_path.exists():
             continue
-        for dirpath, dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root_path):
             dirnames[:] = sorted(d for d in dirnames if d not in excluded_dirs)
             matched.extend(
-                Path(dirpath, name).as_posix()
+                Path(dirpath, name).relative_to(base_dir).as_posix()
                 for name in filenames
-                if (suffixes and name.endswith(suffixes)) or (exact_names and name in exact_names)
+                if suffixes and name.endswith(suffixes)
             )
     return sorted(matched)
 
@@ -181,41 +182,34 @@ def collect_target_files(
     roots: Sequence[str] = (".",),
     suffixes: tuple[str, ...] = (),
     excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
+    base_dir: Path = REPO_ROOT,
 ) -> list[str]:
     """Collects repo files under `roots` in `check` mode or staged `ACM` files in `fix` mode."""
     if mode == "check":
-        return walk_repo_files(roots, suffixes=suffixes, excluded_dirs=excluded_dirs)
+        return walk_repo_files(
+            roots, suffixes=suffixes, excluded_dirs=excluded_dirs, base_dir=base_dir
+        )
     regex = re.compile(staged_regex)
     return [path for path in git_staged_paths("ACM") if regex.search(path)]
 
 
 def should_run_scope(
-    mode: str, *, roots: Sequence[str], suffixes: tuple[str, ...], fix_pattern: str
+    mode: str,
+    *,
+    roots: Sequence[str],
+    suffixes: tuple[str, ...],
+    fix_pattern: str,
+    base_dir: Path = REPO_ROOT,
 ) -> bool:
     """Returns True when `roots` contain files in `check` mode or `AMD` paths match `fix_pattern`."""
     if mode == "check":
-        return bool(walk_repo_files(roots, suffixes=suffixes))
+        return bool(walk_repo_files(roots, suffixes=suffixes, base_dir=base_dir))
     return staged_paths_match("AMD", fix_pattern)
 
 
-def resolve_binary(name: str, extra_dirs: Sequence[Path] = ()) -> str | None:
-    """Resolves executable `name` from `PATH` or fallback `extra_dirs`."""
-    if found := shutil.which(name):
-        return found
-    for directory in extra_dirs:
-        if (candidate := directory / name).is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
-
-
-def docker_prefix(
-    image: str, mount: str, *, as_user: bool = False, entrypoint: str | None = None
-) -> list[str]:
-    """Builds a `docker run --rm` command prefix mounting `cwd` at `mount`."""
-    cmd = ["docker", "run", "--rm"]
-    if as_user and hasattr(os, "getuid") and hasattr(os, "getgid"):
-        cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"])
-    cmd.extend(["-v", f"{os.getcwd()}:{mount}", "-w", mount])
+def docker_prefix(image: str, mount: str, *, entrypoint: str | None = None) -> list[str]:
+    """Builds a `docker run --rm` command prefix mounting `REPO_ROOT` at `mount`."""
+    cmd = ["docker", "run", "--rm", "-v", f"{REPO_ROOT}:{mount}", "-w", mount]
     if entrypoint is not None:
         cmd.extend(["--entrypoint", entrypoint])
     return [*cmd, image]
@@ -228,15 +222,13 @@ def resolve_local_or_docker(
     docker_image: str,
     mount: str,
     missing_label: str,
-    extra_dirs: Sequence[Path] = (),
-    as_user: bool = False,
     entrypoint: str | None = None,
 ) -> tuple[list[str], bool] | None:
     """Returns `(cmd_prefix, is_docker)` for `tool`, falling back to `docker_image` or None."""
-    if local := resolve_binary(tool, extra_dirs):
+    if local := shutil.which(tool):
         return [local], False
     if shutil.which("docker"):
-        return docker_prefix(docker_image, mount, as_user=as_user, entrypoint=entrypoint), True
+        return docker_prefix(docker_image, mount, entrypoint=entrypoint), True
     ctx.warn_missing(f"{tool} or docker not found. {missing_label}")
     return None
 
