@@ -192,6 +192,33 @@ class ToolResolutionTest(unittest.TestCase):
             )
         self.assertTrue(ctx.failed)
 
+    def test_resolve_go_bin_tool_and_ui_binary(self):
+        with mock.patch.dict(os.environ, {"GOBIN": "/custom/gobin"}, clear=True):
+            self.assertEqual(gates.resolve_go_bin_dir(), Path("/custom/gobin"))
+        with mock.patch.dict(os.environ, {"GOPATH": "/gp1:/gp2"}, clear=True):
+            self.assertEqual(gates.resolve_go_bin_dir(), Path("/gp1/bin"))
+        ok = subprocess.CompletedProcess([], 0, stdout="/gp_env:/other\n", stderr="")
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(gates.shutil, "which", return_value="/usr/bin/go"),
+            mock.patch.object(gates, "exec_cmd", return_value=ok),
+        ):
+            self.assertEqual(gates.resolve_go_bin_dir(), Path("/gp_env/bin"))
+        ctx = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "resolve_binary", return_value=None),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertIsNone(gates.resolve_go_tool(ctx, "actionlint", "actionlint not found."))
+        self.assertTrue(ctx.failed)
+        ctx_ui = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates.os, "access", return_value=False),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertIsNone(gates.resolve_ui_binary(ctx_ui, "eslint"))
+        self.assertTrue(ctx_ui.failed)
+
     def test_run_mode_command_respects_ignore_fix_error(self):
         ctx_fix_ok = gates.RunContext(mode="fix")
         ctx_fix = gates.RunContext(mode="fix")

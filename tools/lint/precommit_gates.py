@@ -164,12 +164,14 @@ def walk_repo_files(
     roots: Sequence[str],
     *,
     suffixes: Sequence[str] = (),
+    exact_names: Sequence[str] = (),
     excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
     base_dir: Path = REPO_ROOT,
 ) -> list[str]:
     """Walks `roots` relative to `base_dir` and returns sorted unique matching paths."""
     matched: set[str] = set()
     suffix_tuple = tuple(suffixes)
+    exact_set = frozenset(exact_names)
     for root in roots:
         root_path = base_dir if root == "." else base_dir / root
         if not root_path.exists():
@@ -179,7 +181,9 @@ def walk_repo_files(
             matched.update(
                 Path(dirpath, name).relative_to(base_dir).as_posix()
                 for name in filenames
-                if not suffix_tuple or name.endswith(suffix_tuple)
+                if (not suffix_tuple and not exact_set)
+                or name.endswith(suffix_tuple)
+                or name in exact_set
             )
     return sorted(matched)
 
@@ -228,9 +232,57 @@ def should_run_scope(
     return staged_paths_match("AMD", fix_pattern)
 
 
-def docker_prefix(image: str, mount: str, *, entrypoint: str | None = None) -> list[str]:
+def resolve_binary(name: str, extra_dirs: Sequence[Path] = ()) -> str | None:
+    """Resolves executable `name` from `PATH` or fallback `extra_dirs`."""
+    if found := shutil.which(name):
+        return found
+    for directory in extra_dirs:
+        if (candidate := directory / name).is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def resolve_go_bin_dir() -> Path:
+    """Resolves `GOBIN`, first `GOPATH/bin` entry, or `~/go/bin`."""
+    if gobin := os.environ.get("GOBIN"):
+        return Path(gobin)
+    if gopath := os.environ.get("GOPATH"):
+        return Path(gopath.split(os.pathsep)[0]) / "bin"
+    if shutil.which("go"):
+        res = exec_cmd(["go", "env", "GOPATH"], capture=True, quiet_err=True)
+        if res.returncode == 0 and res.stdout.strip():
+            return Path(res.stdout.strip().split(os.pathsep)[0]) / "bin"
+    return Path.home() / "go" / "bin"
+
+
+def resolve_go_tool(ctx: RunContext, name: str, skip_msg: str, hint: str = "") -> str | None:
+    """Resolves a Go-installed tool binary or emits `skip_msg` via `ctx.warn_missing`."""
+    if binary := resolve_binary(name, (resolve_go_bin_dir(), Path.home() / "go/bin")):
+        return binary
+    ctx.warn_missing(skip_msg, hint)
+    return None
+
+
+def resolve_ui_binary(ctx: RunContext, name: str) -> str | None:
+    """Resolves `name` inside `cmd/ui/node_modules/.bin`, or logs `npm ci` instructions."""
+    candidate = Path("cmd/ui/node_modules/.bin") / name
+    if os.access(candidate, os.X_OK):
+        return str(candidate)
+    print(f"❌ ERROR: Local {name} not found at {candidate}.")
+    print("   Please install dependencies: cd cmd/ui && npm ci --legacy-peer-deps")
+    if ctx.mode == "check":
+        ctx.failed = True
+    return None
+
+
+def docker_prefix(
+    image: str, mount: str, *, as_user: bool = False, entrypoint: str | None = None
+) -> list[str]:
     """Builds a `docker run --rm` command prefix mounting `REPO_ROOT` at `mount`."""
-    cmd = ["docker", "run", "--rm", "-v", f"{REPO_ROOT}:{mount}", "-w", mount]
+    cmd = ["docker", "run", "--rm"]
+    if as_user and hasattr(os, "getuid") and hasattr(os, "getgid"):
+        cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"])
+    cmd.extend(["-v", f"{REPO_ROOT}:{mount}", "-w", mount])
     if entrypoint is not None:
         cmd.extend(["--entrypoint", entrypoint])
     return [*cmd, image]
@@ -243,13 +295,15 @@ def resolve_local_or_docker(
     docker_image: str,
     mount: str,
     missing_label: str,
+    extra_dirs: Sequence[Path] = (),
+    as_user: bool = False,
     entrypoint: str | None = None,
 ) -> tuple[list[str], bool] | None:
     """Returns `(cmd_prefix, is_docker)` for `tool`, falling back to `docker_image` or None."""
-    if local := shutil.which(tool):
+    if local := resolve_binary(tool, extra_dirs):
         return [local], False
     if shutil.which("docker"):
-        return docker_prefix(docker_image, mount, entrypoint=entrypoint), True
+        return docker_prefix(docker_image, mount, as_user=as_user, entrypoint=entrypoint), True
     ctx.warn_missing(f"{tool} or docker not found. {missing_label}")
     return None
 
