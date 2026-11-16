@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -37,17 +39,32 @@ class RunContextTest(unittest.TestCase):
             ctx.fail("broken")
         self.assertTrue(ctx.failed)
 
+    def test_exec_cmd_handles_real_subprocess_and_missing_binary(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = gates.exec_cmd(
+                [sys.executable, "-c", "import os; print(os.path.basename(os.getcwd()))"],
+                cwd=tmpdir,
+                capture=True,
+            )
+            self.assertEqual(res.returncode, 0)
+            self.assertEqual(res.stdout.strip(), Path(tmpdir).name)
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err_buf:
+            missing = gates.exec_cmd(["nonexistent_binary_xmc_test"])
+        self.assertEqual(missing.returncode, 127)
+        self.assertIn("Failed to run", err_buf.getvalue())
+
 
 class GitDiscoveryTest(unittest.TestCase):
     def test_git_staged_paths_exits_on_git_error(self):
         err_proc = subprocess.CompletedProcess([], 128, stdout="", stderr="bad git")
         with (
             mock.patch.object(gates, "exec_cmd", return_value=err_proc),
-            mock.patch("sys.stderr", new_callable=io.StringIO),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err_mock,
             self.assertRaises(SystemExit) as cm,
         ):
             gates.git_staged_paths("AM", no_renames=True)
         self.assertEqual(cm.exception.code, 1)
+        self.assertIn("bad git", err_mock.getvalue())
 
     def test_staged_paths_match_uses_no_renames_and_regex(self):
         ok_proc = subprocess.CompletedProcess(
@@ -76,6 +93,85 @@ class PythonGateTest(unittest.TestCase):
         ):
             gates.run_python_gate(ctx, gate)
         exec_mock.assert_not_called()
+
+        with (
+            mock.patch.object(gates, "staged_paths_match", side_effect=[False, True]),
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+            ) as del_exec,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            gates.run_python_gate(ctx, gate)
+        del_exec.assert_called_once()
+
+        ctx_check = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+            ) as chk_exec,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            gates.run_python_gate(ctx_check, gate)
+        chk_exec.assert_called_once()
+
+    def test_baseline_error_paths_and_unchanged(self):
+        gate = gates.PythonGate(
+            banner="--> Ratchet",
+            script="tools/lint/check_legacy_imports.py",
+            failure_msg="ratchet failed",
+            baseline_path="tools/lint/legacy_imports_baseline.json",
+        )
+        # Unchanged baseline
+        ctx_same = gates.RunContext(mode="fix")
+        with (
+            mock.patch.object(
+                gates,
+                "exec_cmd",
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                ],
+            ),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            gates.run_python_gate(ctx_same, gate)
+        self.assertFalse(ctx_same.failed)
+
+        # Failed git add / update-baseline / git diff error
+        for seq in (
+            [
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 1, "", ""),
+            ],
+            [
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 2, "", ""),
+            ],
+            [
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 1, "", ""),
+                subprocess.CompletedProcess([], 1, "", ""),
+            ],
+        ):
+            ctx_err = gates.RunContext(mode="fix")
+            with (
+                mock.patch.object(gates, "exec_cmd", side_effect=seq),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                gates.run_python_gate(ctx_err, gate)
+            self.assertTrue(ctx_err.failed)
+
+    def test_main_sets_bypass_venv_and_runs_all_gates(self):
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(gates, "run_python_gate") as run_mock,
+        ):
+            self.assertEqual(gates.main(["--mode", "check"]), 0)
+            self.assertEqual(os.environ.get("XMC_BYPASS_VENV"), "1")
+        self.assertEqual(run_mock.call_count, len(gates.PYTHON_GATES))
 
     def test_runs_and_updates_baseline_when_changed_in_fix_mode(self):
         ctx = gates.RunContext(mode="fix")

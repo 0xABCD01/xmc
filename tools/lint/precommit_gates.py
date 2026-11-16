@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -101,18 +102,24 @@ def exec_cmd(
     quiet_out: bool = False,
     quiet_err: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Executes `cmd` with explicit `check=False` and optional stdio redirection."""
+    """Executes `cmd` cleanly, returning returncode `127` on `OSError`."""
     out = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet_out else None)
     err = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet_err else None)
-    return subprocess.run(
-        list(cmd),
-        cwd=str(cwd) if cwd is not None else None,
-        env=env,
-        stdout=out,
-        stderr=err,
-        text=True,
-        check=False,
-    )
+    cmd_list = list(cmd)
+    try:
+        return subprocess.run(
+            cmd_list,
+            cwd=str(cwd) if cwd is not None else None,
+            env=env,
+            stdout=out,
+            stderr=err,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        if not capture and not quiet_err and cmd_list:
+            print(f"❌ Failed to run {cmd_list[0]}: {exc}", file=sys.stderr)
+        return subprocess.CompletedProcess(cmd_list, 127, stdout="", stderr=str(exc))
 
 
 def git_staged_paths(diff_filter: str, *, no_renames: bool = False) -> list[str]:
@@ -123,6 +130,8 @@ def git_staged_paths(diff_filter: str, *, no_renames: bool = False) -> list[str]
     res = exec_cmd([*cmd, f"--diff-filter={diff_filter}"], cwd=REPO_ROOT, capture=True)
     if res.returncode != 0:
         print("❌ git diff --cached failed; cannot select pre-commit checks.", file=sys.stderr)
+        if res.stderr:
+            print(res.stderr.strip(), file=sys.stderr)
         raise SystemExit(1)
     return [line for line in res.stdout.splitlines() if line]
 
@@ -131,6 +140,28 @@ def staged_paths_match(diff_filter: str, pattern: str) -> bool:
     """Returns True when any staged path in `diff_filter` matches regex `pattern`."""
     regex = re.compile(pattern)
     return any(regex.search(path) for path in git_staged_paths(diff_filter, no_renames=True))
+
+
+def _update_baseline(ctx: RunContext, gate: PythonGate) -> None:
+    if not gate.baseline_path or ctx.mode != "fix":
+        return
+    if (
+        exec_cmd(
+            [sys.executable, gate.script, "--update-baseline"], cwd=REPO_ROOT, quiet_out=True
+        ).returncode
+        != 0
+    ):
+        ctx.fail(f"Failed to update baseline for {gate.script}.")
+        return
+    diff_res = exec_cmd(["git", "diff", "--quiet", "--", gate.baseline_path], cwd=REPO_ROOT)
+    if diff_res.returncode not in (0, 1):
+        ctx.fail(f"git diff failed checking {gate.baseline_path}.")
+        return
+    if diff_res.returncode == 1:
+        if exec_cmd(["git", "add", "--", gate.baseline_path], cwd=REPO_ROOT).returncode != 0:
+            ctx.fail(f"Failed to stage updated {gate.baseline_path}.")
+            return
+        print(f"--> Lowered and staged {gate.baseline_path}.")
 
 
 def run_python_gate(ctx: RunContext, gate: PythonGate) -> None:
@@ -146,18 +177,12 @@ def run_python_gate(ctx: RunContext, gate: PythonGate) -> None:
     if exec_cmd([sys.executable, gate.script], cwd=REPO_ROOT, quiet_out=True).returncode != 0:
         ctx.fail(gate.failure_msg)
         return
-    if gate.baseline_path and ctx.mode == "fix":
-        exec_cmd([sys.executable, gate.script, "--update-baseline"], cwd=REPO_ROOT, quiet_out=True)
-        if (
-            exec_cmd(["git", "diff", "--quiet", "--", gate.baseline_path], cwd=REPO_ROOT).returncode
-            != 0
-        ):
-            exec_cmd(["git", "add", "--", gate.baseline_path], cwd=REPO_ROOT)
-            print(f"--> Lowered and staged {gate.baseline_path}.")
+    _update_baseline(ctx, gate)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Runs all declarative `PYTHON_GATES` for the requested hook mode."""
+    os.environ.setdefault("XMC_BYPASS_VENV", "1")
     parser = argparse.ArgumentParser(description="Run declarative Python pre-commit gates.")
     parser.add_argument("--mode", choices=("fix", "check"), default="fix")
     args = parser.parse_args(list(argv) if argv is not None else None)
