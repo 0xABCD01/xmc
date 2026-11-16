@@ -419,6 +419,29 @@ class LanguageChecksTest(unittest.TestCase):
                 "--no-config-lookup",
                 "-c",
                 "tools/lint/eslint.nonui.config.mjs",
+                "--fix",
+                ".github/scripts/a.js",
+            ],
+        )
+
+        ctx_chk = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "git_ls_files", return_value=[".github/scripts/a.js"]),
+            mock.patch.object(gates, "resolve_ui_binary", return_value="eslint"),
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+            ) as chk_exec,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_nonui_js(ctx_chk)
+        self.assertFalse(ctx_chk.failed)
+        self.assertEqual(
+            chk_exec.call_args.args[0],
+            [
+                "eslint",
+                "--no-config-lookup",
+                "-c",
+                "tools/lint/eslint.nonui.config.mjs",
                 ".github/scripts/a.js",
             ],
         )

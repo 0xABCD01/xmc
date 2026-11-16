@@ -312,15 +312,14 @@ def check_nonui_js(ctx: gates.RunContext) -> None:
     if not eslint:
         return
     print("--> Running Non-UI JS Linter (ESLint)...")
-    for batch in gates.chunked(files, 500):
-        if (
-            gates.exec_cmd(
-                [eslint, "--no-config-lookup", "-c", "tools/lint/eslint.nonui.config.mjs", *batch],
-                cwd=gates.REPO_ROOT,
-            ).returncode
-            != 0
-        ):
-            ctx.fail("Non-UI JS ESLint check failed.")
+    gates.run_mode_command(
+        ctx,
+        [eslint, "--no-config-lookup", "-c", "tools/lint/eslint.nonui.config.mjs"],
+        check_args=[],
+        fix_args=["--fix"],
+        failure_msg="Non-UI JS ESLint check failed.",
+        files=files,
+    )
 
 
 def _autostage(subcommand: str, state_path: str) -> bool:
