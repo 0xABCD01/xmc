@@ -119,31 +119,72 @@ def check_go(ctx: gates.RunContext) -> None:
     )
 
 
-def check_ui(ctx: gates.RunContext) -> None:
-    """Runs Prettier and ESLint on Angular UI sources."""
-    files = gates.collect_target_files(
-        ctx.mode,
-        staged_regex=r"^cmd/ui/.*\.(ts|html|scss)$",
-        roots=("cmd/ui",),
-        suffixes=(".ts", ".html", ".scss"),
-    )
-    if not files:
+_UI_EXCLUDES = gates.COMMON_EXCLUDES | frozenset({"dist", "coverage", "out-tsc"})
+_UI_TYPECHECK_PATTERN = (
+    r"^cmd/ui/(.*\.ts|([^/]+/)*tsconfig[^/]*\.json|([^/]+/)*package(-lock)?\.json)$"
+)
+
+
+def _run_ui_eslint(ctx: gates.RunContext, ui_files: Sequence[str], *, run_all_eslint: bool) -> None:
+    ui_lint_files = [
+        f.removeprefix("cmd/ui/")
+        for f in ui_files
+        if f != "cmd/ui/index.html" and f.endswith((".ts", ".html"))
+    ]
+    if not run_all_eslint and not ui_lint_files:
         return
-    for tool, cfg, chk, fx, title in (
-        ("prettier", "cmd/ui/.prettierrc", ["--check"], ["--write"], "Formatter (Prettier)"),
-        ("eslint", "cmd/ui/eslint.config.js", [], ["--fix"], "Linter (ESLint)"),
-    ):
-        if binary := gates.resolve_ui_binary(ctx, tool):
-            print(f"--> Running UI {title}...")
-            gates.run_mode_command(
-                ctx,
-                [binary, "--config", cfg],
-                check_args=chk,
-                fix_args=fx,
-                failure_msg=f"{tool.capitalize()} check failed.",
-                files=files,
-                chunk_size=200,
-            )
+    if not gates.resolve_ui_binary(ctx, "eslint"):
+        return
+    print("--> Running UI Linter (ESLint)...")
+    targets = ["."] if run_all_eslint else ui_lint_files
+    gates.run_mode_command(
+        ctx,
+        ["./node_modules/.bin/eslint"],
+        check_args=[],
+        fix_args=["--fix"],
+        failure_msg="ESLint check failed.",
+        cwd=gates.REPO_ROOT / "cmd/ui",
+        files=targets,
+        chunk_size=200,
+    )
+
+
+def check_ui(ctx: gates.RunContext) -> None:
+    """Runs Prettier, ESLint (cwd=`cmd/ui`), and `tsc` typecheck on Angular UI sources."""
+    if ctx.mode == "check":
+        ui_files = gates.walk_repo_files(
+            ("cmd/ui",), suffixes=(".ts", ".html", ".scss"), excluded_dirs=_UI_EXCLUDES
+        )
+    else:
+        regex = re.compile(r"^cmd/ui/.*\.(ts|html|scss)$")
+        ui_files = [p for p in gates.git_staged_paths("ACMR") if regex.search(p)]
+    run_all_eslint = ctx.mode == "check" or gates.staged_paths_match(
+        "AM", r"^cmd/ui/eslint\.config\.js$"
+    )
+    run_typecheck = ctx.mode == "check" or gates.staged_paths_match("AMD", _UI_TYPECHECK_PATTERN)
+    if not ui_files and not run_all_eslint and not run_typecheck:
+        return
+    if ui_files and (prettier := gates.resolve_ui_binary(ctx, "prettier")):
+        print("--> Running UI Formatter (Prettier)...")
+        gates.run_mode_command(
+            ctx,
+            [prettier, "--config", "cmd/ui/.prettierrc"],
+            check_args=["--check"],
+            fix_args=["--write"],
+            failure_msg="Prettier check failed.",
+            files=ui_files,
+            chunk_size=200,
+        )
+    _run_ui_eslint(ctx, ui_files, run_all_eslint=run_all_eslint)
+    if run_typecheck and gates.resolve_ui_binary(ctx, "tsc"):
+        print("--> Running UI Typechecker (tsc)...")
+        if (
+            gates.exec_cmd(
+                ["npm", "run", "--silent", "typecheck"], cwd=gates.REPO_ROOT / "cmd/ui"
+            ).returncode
+            != 0
+        ):
+            ctx.fail("UI TypeScript typecheck failed.")
 
 
 def check_license(ctx: gates.RunContext) -> None:
