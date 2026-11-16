@@ -200,6 +200,14 @@ check_ui_selector_contract() {
   fi
 }
 
+check_profile_lock() {
+  echo "--> Checking Component Profile Release Locks..."
+  if ! XMC_BYPASS_VENV=1 python3 tools/components/check_profile_lock.py --staged >/dev/null; then
+    echo "❌ GA-locked component profile check failed (see JSON error above)."
+    FAILED=1
+  fi
+}
+
 
 check_ui() {
   local ui_files
@@ -589,6 +597,7 @@ main() {
   check_agent_doc_paths
   check_file_naming
   check_ui_selector_contract
+  check_profile_lock
   check_ui
   check_license
   check_python

@@ -71,6 +71,8 @@ Harness for testing and evaluating skill/rule modifications (see [`tools/benchma
 
 ### 5. `tools/components/` (Component Manifest Linting & Profile Discovery)
 Harness for automated validation and discovery of XMC component profiles:
+- [`check_profile_lock.py`](components/check_profile_lock.py): Enforces GA release locks declared in [`deploy/profiles/locked_profiles.yaml`](../deploy/profiles/locked_profiles.yaml). Fails when a diff touches any path under a locked profile directory unless the commit carries a `PROFILE-LOCK-OVERRIDE: <profile> <reason>` trailer for a legitimate patch release. Runs in pre-commit (`--staged`) and the lint CI job (`--base-ref`).
+- [`check_profile_lock_test.py`](components/check_profile_lock_test.py): Hermetic unit and Git integration test suite for locked profile YAML parsing, path classification, rename/delete handling, and override trailer validation.
 - [`run_linter.py`](components/run_linter.py): Discovers component manifest directories across configured search roots (`deploy/profiles`, `deploy/components`, `examples/components/profiles`), resolves co-located `rules.yaml` files, and runs `component-linter` with consolidated text/JSON reporting.
 - [`run_linter_test.py`](components/run_linter_test.py): Hermetic unit test suite for directory discovery, rules matching, exit codes, and JSON serialization.
 
