@@ -40,7 +40,9 @@ graph TD
 | [`git-range-diff.js`](git-range-diff.js) | **Git Subprocess Mechanics**: Proactively fetches missing Git refs (`ensureGitRefs`), detects fast-forward ancestry, computes line deltas, indexes candidate commits using `git patch-id` and commit subjects, and resolves commit ranges for stacked PRs. |
 | [`range-diff-parser.js`](range-diff-parser.js) | **Diff Parser**: Parses raw `git range-diff` output. Distinguishes code hunks from commit metadata/commit message hunks, computes added/deleted line deltas (tracking the test file subset), and extracts added commit SHAs. |
 | [`test-file-classifier.js`](test-file-classifier.js) | **Test File Classifier**: Identifies test files and fixtures whose line changes are excluded from the code owner grace budget. |
-| [`approval-policy.js`](approval-policy.js) | **Decision Engine**: Evaluates whether a PR qualify for auto-reapproval (clean rebase vs code owner grace delta). Enforces protected file boundaries, handles absence PR auto-approvals, and manages reviewer assignment logic. |
+| [`approval-policy.js`](approval-policy.js) | **Decision Engine**: Evaluates whether a PR qualifies for auto-reapproval (clean rebase vs code owner grace delta) and enforces protected file boundaries. |
+| [`assign-reviewers.js`](assign-reviewers.js) | **Reviewer Assignment**: Parses `OWNERS`, filters out absent reviewers configured in the `ABSENCE_LIST` repository variable (`vars.ABSENCE_LIST`), and assigns eligible reviewers to open pull requests. |
+| [`absence-schedule.js`](absence-schedule.js) | **Absence Schedule Parser**: Parses and validates unconditional (`NICK`) and date-ranged (`NICK DD.MM.YYYY-DD.MM.YYYY`) reviewer absence entries from `ABSENCE_LIST`. |
 
 ---
 

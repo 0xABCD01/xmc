@@ -107,4 +107,51 @@ test('validateAbsenceContent validates content and rejects non-string input', ()
   const nonStringResult = validateAbsenceContent(null);
   assert.equal(nonStringResult.valid, false);
   assert.ok(nonStringResult.reason.includes('not a string'));
+
+  const invalidCases = [
+    {
+      content: 'alice 16.11.2026-15.11.2026\n',
+      expectedSubstring: 'after end date'
+    },
+    {
+      content: 'alice 31.02.2026-15.03.2026\n',
+      expectedSubstring: 'invalid start date'
+    },
+    {
+      content: 'alice 10.11.2026-29.02.2027\n',
+      expectedSubstring: 'invalid end date'
+    },
+    {
+      content: 'alice 2026-11-10-2026-11-15\n',
+      expectedSubstring: 'invalid date range format'
+    },
+    {
+      content: 'alice 10.11.2026-15.11.2026 extra\n',
+      expectedSubstring: 'invalid format'
+    },
+    {
+      content: '10.11.2026-15.11.2026\n',
+      expectedSubstring: 'invalid username'
+    }
+  ];
+
+  for (const { content, expectedSubstring } of invalidCases) {
+    const validation = validateAbsenceContent(content);
+    assert.equal(validation.valid, false, `Expected invalid for: ${content}`);
+    assert.ok(
+      validation.reason.includes(expectedSubstring),
+      `Expected "${validation.reason}" to include "${expectedSubstring}"`
+    );
+  }
+});
+
+test('parseAbsenceFile supports comma/semicolon delimiters and comments with commas', () => {
+  const envContent = `
+# - NICK DD.MM.YYYY-DD.MM.YYYY (absent during the inclusive UTC date range, e.g., alice 10.11.2026-15.11.2026)
+pachopepe, andrzejfudro; janzak-dev 16.11.2026-18.11.2026
+`;
+  assert.deepEqual(
+    parseAbsenceFile(envContent, new Date('2026-11-16T12:00:00Z')),
+    { absentUsers: ['pachopepe', 'andrzejfudro', 'janzak-dev'], errors: [] }
+  );
 });

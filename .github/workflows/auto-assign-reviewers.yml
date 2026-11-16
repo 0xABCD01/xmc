@@ -41,6 +41,8 @@ jobs:
 
       - name: 'Select and Assign Reviewers'
         uses: 'actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea' # v7.0.1
+        env:
+          ABSENCE_LIST: ${{ vars.ABSENCE_LIST }}
         with:
           script: |
             const { run } = require('./.github/scripts/assign-reviewers.js');

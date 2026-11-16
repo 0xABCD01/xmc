@@ -640,6 +640,7 @@ jobs:
         env:
           NEEDS_CONTEXT: ${{ toJson(needs) }}
           XID: '${{ needs.aggregate-results.outputs.launched_xids }}'
+          ABSENCE_LIST: ${{ vars.ABSENCE_LIST }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |

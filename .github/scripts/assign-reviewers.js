@@ -55,13 +55,14 @@ async function run({ github, context, core }) {
   }
 
   let absentUsers = [];
-  if (fs.existsSync('ABSENCE.md')) {
-    const parsedAbsence = parseAbsenceFile(fs.readFileSync('ABSENCE.md', 'utf8'));
+  const rawAbsenceList = process.env.ABSENCE_LIST || '';
+  if (rawAbsenceList.trim()) {
+    const parsedAbsence = parseAbsenceFile(rawAbsenceList);
     absentUsers = parsedAbsence.absentUsers;
     for (const err of parsedAbsence.errors) {
-      core.warning(`Invalid ABSENCE.md entry ignored: ${err}`);
+      core.warning(`Invalid ABSENCE_LIST entry ignored: ${err}`);
     }
-    core.info(`Parsed absent reviewers from ABSENCE.md: ${absentUsers.join(', ')}`);
+    core.info(`Parsed absent reviewers from ABSENCE_LIST: ${absentUsers.join(', ')}`);
   }
 
   const candidates = filterEligibleReviewers(rawReviewers, prAuthor, absentUsers);
@@ -188,9 +189,24 @@ async function getPullRequestMetadata(github, context, core) {
   };
 }
 
+/**
+ * Pure function: Checks if the PR author is listed in the code owners array (case-insensitively).
+ * @param {string} prAuthor - Username of the PR author.
+ * @param {string[]} ownersList - Array of code owner usernames.
+ * @returns {boolean} True if author is in code owners list.
+ */
+function isAuthorCodeOwner(prAuthor, ownersList) {
+  if (!prAuthor || !Array.isArray(ownersList)) {
+    return false;
+  }
+  const authorLower = prAuthor.toLowerCase();
+  return ownersList.some(owner => (owner || '').toLowerCase() === authorLower);
+}
+
 module.exports = {
   NUM_REVIEWERS_TO_ASSIGN,
   parseReviewersFromOwners,
+  isAuthorCodeOwner,
   filterEligibleReviewers,
   selectRandomReviewers,
   isPullRequestOpen,

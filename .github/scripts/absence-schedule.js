@@ -85,9 +85,9 @@ function parseAbsenceDateRange(rangeStr, lineNumber) {
 }
 
 /**
- * Pure function: Parses and validates a single line from ABSENCE.md.
+ * Pure function: Parses and validates a single line or entry from ABSENCE_LIST.
  * Supports either bare "NICK" or "NICK DD.MM.YYYY-DD.MM.YYYY" (inclusive).
- * @param {string} rawLine - Raw line from ABSENCE.md.
+ * @param {string} rawLine - Raw line from ABSENCE_LIST.
  * @param {number} [lineNumber=1] - 1-based line number for error reporting.
  * @returns {{ empty: boolean, valid: boolean, username?: string, startDate?: Date|null, endDate?: Date|null, reason?: string }}
  */
@@ -114,10 +114,11 @@ function parseAbsenceLine(rawLine, lineNumber = 1) {
 }
 
 /**
- * Pure function: Parses ABSENCE.md content and evaluates scheduled absences against `currentDate` (UTC).
+ * Pure function: Parses ABSENCE_LIST content and evaluates scheduled absences against `currentDate` (UTC).
  * Bare "NICK" entries are unconditionally absent; "NICK X-Y" entries are absent when the UTC calendar
- * day of `currentDate` falls within `[X, Y]` inclusive. Malformed lines are reported in `errors`.
- * @param {string} content - Raw string content of ABSENCE.md.
+ * day of `currentDate` falls within `[X, Y]` inclusive. Supports newline, comma, or semicolon delimiters.
+ * Malformed entries are reported in `errors`.
+ * @param {string} content - Raw string content of ABSENCE_LIST.
  * @param {Date} [currentDate=new Date()] - Date to evaluate scheduled absences against.
  * @returns {{ absentUsers: string[], errors: string[] }} Currently absent usernames and line validation errors.
  */
@@ -133,31 +134,38 @@ function parseAbsenceFile(content, currentDate = new Date()) {
   const errors = [];
   const lines = (content || '').split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const entry = parseAbsenceLine(lines[i], i + 1);
-    if (entry.empty) {
+    const uncommented = (lines[i] || '').split('#')[0].trim();
+    if (!uncommented) {
       continue;
     }
-    if (!entry.valid) {
-      errors.push(entry.reason);
-      continue;
-    }
-    if (!entry.startDate || (today >= entry.startDate && today <= entry.endDate)) {
-      absentUsers.push(entry.username);
+    const segments = uncommented.split(/[,;]/);
+    for (const segment of segments) {
+      const entry = parseAbsenceLine(segment, i + 1);
+      if (entry.empty) {
+        continue;
+      }
+      if (!entry.valid) {
+        errors.push(entry.reason);
+        continue;
+      }
+      if (!entry.startDate || (today >= entry.startDate && today <= entry.endDate)) {
+        absentUsers.push(entry.username);
+      }
     }
   }
   return { absentUsers, errors };
 }
 
 /**
- * Pure function: Validates the contents of ABSENCE.md, checking that every non-empty
- * non-comment line is either "NICK" or "NICK DD.MM.YYYY-DD.MM.YYYY" with valid
+ * Pure function: Validates the contents of ABSENCE_LIST, checking that every non-empty
+ * non-comment entry is either "NICK" or "NICK DD.MM.YYYY-DD.MM.YYYY" with valid
  * calendar dates and start <= end.
- * @param {string} content - Raw ABSENCE.md content.
+ * @param {string} content - Raw ABSENCE_LIST content.
  * @returns {{ valid: boolean, reason?: string }}
  */
 function validateAbsenceContent(content) {
   if (typeof content !== 'string') {
-    return { valid: false, reason: 'ABSENCE.md content is missing or not a string' };
+    return { valid: false, reason: 'ABSENCE_LIST content is missing or not a string' };
   }
   const { errors } = parseAbsenceFile(content);
   return errors.length > 0 ? { valid: false, reason: errors[0] } : { valid: true };

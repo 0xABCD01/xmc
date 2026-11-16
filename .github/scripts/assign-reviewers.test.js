@@ -20,12 +20,22 @@ const path = require('path');
 const { parseAbsenceFile } = require('./absence-schedule');
 const {
   parseReviewersFromOwners,
+  isAuthorCodeOwner,
   filterEligibleReviewers,
   selectRandomReviewers,
   isPullRequestOpen,
   shouldSkipAssignment,
   run
 } = require('./assign-reviewers');
+
+test('isAuthorCodeOwner checks code owners list case-insensitively', () => {
+  const owners = ['alice', 'bob', 'charlie'];
+  assert.strictEqual(isAuthorCodeOwner('alice', owners), true);
+  assert.strictEqual(isAuthorCodeOwner('ALICE', owners), true);
+  assert.strictEqual(isAuthorCodeOwner('dave', owners), false);
+  assert.strictEqual(isAuthorCodeOwner('', owners), false);
+  assert.strictEqual(isAuthorCodeOwner('alice', null), false);
+});
 
 test('parseReviewersFromOwners parses flat text reviewers correctly and strips comments', () => {
   const sampleOwners = `
@@ -83,19 +93,17 @@ test('absent reviewers mapping handles markdown formatted lists (- , * , @)', ()
   assert.deepStrictEqual(result, ['charlie']);
 });
 
-test('run skips absent reviewers and logs warnings for malformed ABSENCE.md entries', async () => {
+test('run skips absent reviewers and logs warnings for malformed ABSENCE_LIST entries', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-assign-reviewers-'));
   const origCwd = process.cwd();
+  const origAbsenceList = process.env.ABSENCE_LIST;
   const warnings = [];
   let requestedReviewers = null;
 
   try {
     process.chdir(tempDir);
     fs.writeFileSync('OWNERS', 'alice\nbob\ncharlie\n');
-    fs.writeFileSync(
-      'ABSENCE.md',
-      'bob\ncharlie 16.11.2026-15.11.2026\n'
-    );
+    process.env.ABSENCE_LIST = 'bob\ncharlie 16.11.2026-15.11.2026\n';
 
     await run({
       github: {
@@ -132,6 +140,11 @@ test('run skips absent reviewers and logs warnings for malformed ABSENCE.md entr
     assert.strictEqual(warnings.length, 1);
     assert.ok(warnings[0].includes('after end date'));
   } finally {
+    if (origAbsenceList === undefined) {
+      delete process.env.ABSENCE_LIST;
+    } else {
+      process.env.ABSENCE_LIST = origAbsenceList;
+    }
     process.chdir(origCwd);
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
