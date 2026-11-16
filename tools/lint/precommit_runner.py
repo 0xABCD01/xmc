@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -258,7 +257,7 @@ def check_shell(ctx: gates.RunContext) -> None:
     if ctx.mode == "check":
         files = gates.git_ls_files(["*.sh", "*.bash"])
     else:
-        files = [p for p in gates.git_staged_paths("ACMR") if re.search(r"\.(sh|bash)$", p)]
+        files = [p for p in gates.git_staged_paths("ACMR") if p.endswith((".sh", ".bash"))]
     if not files:
         return
     shellcheck = gates.resolve_binary("shellcheck", (Path.home() / ".local/bin",))
