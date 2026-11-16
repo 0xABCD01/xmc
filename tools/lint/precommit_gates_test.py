@@ -99,9 +99,10 @@ class GitDiscoveryTest(unittest.TestCase):
                 [], 0, stdout="b.sh\0a.sh\0b.sh\0deleted.sh\0dir.sh\0\0", stderr=""
             )
             with mock.patch.object(gates, "exec_cmd", return_value=ok_proc) as run_mock:
-                files = gates.git_ls_files(["*.sh"], base_dir=root)
+                files = gates.git_ls_files(["*.sh"], include_untracked=True, base_dir=root)
         self.assertEqual(files, ["a.sh", "b.sh"])
         self.assertIn("-z", run_mock.call_args.args[0])
+        self.assertIn("--exclude-standard", run_mock.call_args.args[0])
         self.assertIn("core.quotePath=false", run_mock.call_args.args[0])
         self.assertEqual(run_mock.call_args.kwargs["cwd"], root)
 
