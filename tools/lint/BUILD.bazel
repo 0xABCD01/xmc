@@ -120,3 +120,22 @@ py_test(
         ":precommit_gates_lib",
     ],
 )
+
+py_library(
+    name = "precommit_deploy_checks_lib",
+    srcs = ["precommit_deploy_checks.py"],
+    imports = ["../.."],
+    deps = [
+        ":precommit_gates_lib",
+    ],
+)
+
+py_test(
+    name = "precommit_deploy_checks_test",
+    srcs = ["precommit_deploy_checks_test.py"],
+    imports = ["../.."],
+    deps = [
+        ":precommit_deploy_checks_lib",
+        ":precommit_gates_lib",
+    ],
+)

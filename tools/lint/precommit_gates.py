@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -27,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+COMMON_EXCLUDES = frozenset({".git", "node_modules", ".angular", "venv", ".venv", "ctk-out"})
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,14 @@ class RunContext:
         print(f"❌ {message}")
         self.failed = True
 
+    def warn_missing(self, warning: str, hint: str = "") -> None:
+        """Prints a missing-tool warning and fails when running in `check` mode."""
+        print(f"--> WARNING: {warning}")
+        if hint:
+            print(f"   {hint}")
+        if self.mode == "check":
+            self.failed = True
+
 
 def exec_cmd(
     cmd: Sequence[str],
@@ -140,6 +150,112 @@ def staged_paths_match(diff_filter: str, pattern: str) -> bool:
     """Returns True when any staged path in `diff_filter` matches regex `pattern`."""
     regex = re.compile(pattern)
     return any(regex.search(path) for path in git_staged_paths(diff_filter, no_renames=True))
+
+
+def walk_repo_files(
+    roots: Sequence[str],
+    *,
+    suffixes: tuple[str, ...] = (),
+    exact_names: tuple[str, ...] = (),
+    excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
+) -> list[str]:
+    """Walks `roots` and returns sorted paths matching `suffixes` or `exact_names`."""
+    matched: list[str] = []
+    for root in roots:
+        if not os.path.exists(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if d not in excluded_dirs)
+            matched.extend(
+                os.path.join(dirpath, name).removeprefix("./")
+                for name in filenames
+                if (suffixes and name.endswith(suffixes)) or (exact_names and name in exact_names)
+            )
+    return sorted(matched)
+
+
+def collect_target_files(
+    mode: str,
+    *,
+    staged_regex: str,
+    roots: Sequence[str] = (".",),
+    suffixes: tuple[str, ...] = (),
+    excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
+) -> list[str]:
+    """Collects repo files under `roots` in `check` mode or staged `ACM` files in `fix` mode."""
+    if mode == "check":
+        return walk_repo_files(roots, suffixes=suffixes, excluded_dirs=excluded_dirs)
+    regex = re.compile(staged_regex)
+    return [path for path in git_staged_paths("ACM") if regex.search(path)]
+
+
+def should_run_scope(
+    mode: str, *, roots: Sequence[str], suffixes: tuple[str, ...], fix_pattern: str
+) -> bool:
+    """Returns True when `roots` contain files in `check` mode or `AMD` paths match `fix_pattern`."""
+    if mode == "check":
+        return bool(walk_repo_files(roots, suffixes=suffixes))
+    return staged_paths_match("AMD", fix_pattern)
+
+
+def resolve_binary(name: str, extra_dirs: Sequence[Path] = ()) -> str | None:
+    """Resolves executable `name` from `PATH` or fallback `extra_dirs`."""
+    if found := shutil.which(name):
+        return found
+    for directory in extra_dirs:
+        if os.access(candidate := directory / name, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def docker_prefix(
+    image: str, mount: str, *, as_user: bool = False, entrypoint: str | None = None
+) -> list[str]:
+    """Builds a `docker run --rm` command prefix mounting `cwd` at `mount`."""
+    cmd = ["docker", "run", "--rm"]
+    if as_user:
+        cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"])
+    cmd.extend(["-v", f"{os.getcwd()}:{mount}", "-w", mount])
+    if entrypoint is not None:
+        cmd.extend(["--entrypoint", entrypoint])
+    return [*cmd, image]
+
+
+def resolve_local_or_docker(
+    ctx: RunContext,
+    tool: str,
+    *,
+    docker_image: str,
+    mount: str,
+    missing_label: str,
+    extra_dirs: Sequence[Path] = (),
+    as_user: bool = False,
+    entrypoint: str | None = None,
+) -> tuple[list[str], bool] | None:
+    """Returns `(cmd_prefix, is_docker)` for `tool`, falling back to `docker_image` or None."""
+    if local := resolve_binary(tool, extra_dirs):
+        return [local], False
+    if shutil.which("docker"):
+        return docker_prefix(docker_image, mount, as_user=as_user, entrypoint=entrypoint), True
+    ctx.warn_missing(f"{tool} or docker not found. {missing_label}")
+    return None
+
+
+def run_mode_command(
+    ctx: RunContext,
+    cmd_base: Sequence[str],
+    *,
+    check_args: Sequence[str],
+    fix_args: Sequence[str],
+    failure_msg: str,
+    ignore_fix_error: bool = False,
+    cwd: str | Path | None = None,
+) -> None:
+    """Runs `cmd_base` with `check_args` or `fix_args` and records failures."""
+    args = check_args if ctx.mode == "check" else fix_args
+    res = exec_cmd([*cmd_base, *args], cwd=cwd)
+    if res.returncode != 0 and (ctx.mode == "check" or not ignore_fix_error):
+        ctx.fail(failure_msg)
 
 
 def _update_baseline(ctx: RunContext, gate: PythonGate) -> None:

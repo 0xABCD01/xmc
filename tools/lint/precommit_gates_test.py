@@ -53,6 +53,16 @@ class RunContextTest(unittest.TestCase):
         self.assertEqual(missing.returncode, 127)
         self.assertIn("Failed to run", err_buf.getvalue())
 
+    def test_warn_missing_fails_only_in_check_mode(self):
+        fix_ctx = gates.RunContext(mode="fix")
+        check_ctx = gates.RunContext(mode="check")
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as buf:
+            fix_ctx.warn_missing("tool missing", "install hint")
+            check_ctx.warn_missing("tool missing")
+        self.assertFalse(fix_ctx.failed)
+        self.assertTrue(check_ctx.failed)
+        self.assertIn("install hint", buf.getvalue())
+
 
 class GitDiscoveryTest(unittest.TestCase):
     def test_git_staged_paths_exits_on_git_error(self):
@@ -75,6 +85,115 @@ class GitDiscoveryTest(unittest.TestCase):
             self.assertFalse(gates.staged_paths_match("D", r"^cmd/"))
         self.assertIn("--no-renames", run_mock.call_args.args[0])
         self.assertEqual(run_mock.call_args.kwargs["cwd"], gates.REPO_ROOT)
+
+    def test_walk_repo_files_collect_target_files_and_should_run_scope(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "main.tf").write_text("", encoding="utf-8")
+            (root / "sub").mkdir()
+            (root / "sub" / "vars.tf").write_text("", encoding="utf-8")
+            (root / "node_modules").mkdir()
+            (root / "node_modules" / "skip.tf").write_text("", encoding="utf-8")
+            orig = os.getcwd()
+            try:
+                os.chdir(root)
+                found = gates.walk_repo_files([".", "missing"], suffixes=(".tf",))
+            finally:
+                os.chdir(orig)
+        self.assertEqual(found, ["main.tf", "sub/vars.tf"])
+
+        with (
+            mock.patch.object(gates, "walk_repo_files", return_value=["deploy/a.tf"]),
+            mock.patch.object(gates, "git_staged_paths", return_value=["deploy/a.tf", "b.py"]),
+            mock.patch.object(gates, "staged_paths_match", return_value=False),
+        ):
+            self.assertEqual(
+                gates.collect_target_files("check", staged_regex=r"\.tf$", suffixes=(".tf",)),
+                ["deploy/a.tf"],
+            )
+            self.assertEqual(
+                gates.collect_target_files("fix", staged_regex=r"\.tf$", suffixes=(".tf",)),
+                ["deploy/a.tf"],
+            )
+            self.assertTrue(
+                gates.should_run_scope(
+                    "check", roots=("deploy",), suffixes=(".tf",), fix_pattern=r"\.tf$"
+                )
+            )
+            self.assertFalse(
+                gates.should_run_scope(
+                    "fix", roots=("deploy",), suffixes=(".tf",), fix_pattern=r"\.tf$"
+                )
+            )
+
+
+class ToolResolutionTest(unittest.TestCase):
+    def test_resolve_binary_and_docker_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = Path(tmpdir) / "mytool"
+            tool.write_text("#!/bin/sh\n", encoding="utf-8")
+            tool.chmod(0o755)
+            with mock.patch.object(gates.shutil, "which", return_value=None):
+                self.assertEqual(gates.resolve_binary("mytool", [Path(tmpdir)]), str(tool))
+                self.assertIsNone(gates.resolve_binary("missing", [Path(tmpdir)]))
+
+        ctx = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "resolve_binary", return_value=None),
+            mock.patch.object(gates.shutil, "which", return_value="/usr/bin/docker"),
+            mock.patch.object(gates.os, "getuid", return_value=1000),
+            mock.patch.object(gates.os, "getgid", return_value=1000),
+        ):
+            res = gates.resolve_local_or_docker(
+                ctx,
+                "ruff",
+                docker_image="ruff:latest",
+                mount="/io",
+                missing_label="skip",
+                as_user=True,
+                entrypoint="sh",
+            )
+            assert res is not None
+            self.assertTrue(res[1])
+            self.assertIn("--entrypoint", res[0])
+
+        with (
+            mock.patch.object(gates, "resolve_binary", return_value=None),
+            mock.patch.object(gates.shutil, "which", return_value=None),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertIsNone(
+                gates.resolve_local_or_docker(
+                    ctx, "trivy", docker_image="img", mount="/src", missing_label="skipped."
+                )
+            )
+        self.assertTrue(ctx.failed)
+
+    def test_run_mode_command_respects_ignore_fix_error(self):
+        ctx_fix = gates.RunContext(mode="fix")
+        ctx_check = gates.RunContext(mode="check")
+        with mock.patch.object(
+            gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
+        ):
+            gates.run_mode_command(
+                ctx_fix,
+                ["tf"],
+                check_args=["fmt", "-check"],
+                fix_args=["fmt"],
+                failure_msg="bad",
+                ignore_fix_error=True,
+            )
+            self.assertFalse(ctx_fix.failed)
+            with mock.patch("sys.stdout", new_callable=io.StringIO):
+                gates.run_mode_command(
+                    ctx_check,
+                    ["tf"],
+                    check_args=["fmt", "-check"],
+                    fix_args=["fmt"],
+                    failure_msg="bad",
+                    ignore_fix_error=True,
+                )
+            self.assertTrue(ctx_check.failed)
 
 
 class PythonGateTest(unittest.TestCase):
