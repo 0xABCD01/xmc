@@ -133,13 +133,14 @@ def _run_ui_eslint(ctx: gates.RunContext, ui_files: Sequence[str], *, run_all_es
     ]
     if not run_all_eslint and not ui_lint_files:
         return
-    if not gates.resolve_ui_binary(ctx, "eslint"):
+    eslint = gates.resolve_ui_binary(ctx, "eslint")
+    if not eslint:
         return
     print("--> Running UI Linter (ESLint)...")
     targets = ["."] if run_all_eslint else ui_lint_files
     gates.run_mode_command(
         ctx,
-        ["./node_modules/.bin/eslint"],
+        [eslint],
         check_args=[],
         fix_args=["--fix"],
         failure_msg="ESLint check failed.",

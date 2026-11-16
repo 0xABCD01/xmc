@@ -175,6 +175,7 @@ class LanguageChecksTest(unittest.TestCase):
             run_mode.call_args_list[0].kwargs["files"],
             ["cmd/ui/app.ts", "cmd/ui/index.html", "cmd/ui/s.scss"],
         )
+        self.assertEqual(run_mode.call_args_list[1].args[1], ["/p/eslint"])
         self.assertEqual(run_mode.call_args_list[1].kwargs["cwd"], gates.REPO_ROOT / "cmd/ui")
         self.assertEqual(run_mode.call_args_list[1].kwargs["fix_args"], ["--fix"])
         self.assertEqual(run_mode.call_args_list[1].kwargs["files"], ["app.ts"])
