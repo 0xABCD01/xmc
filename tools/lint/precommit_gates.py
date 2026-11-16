@@ -64,7 +64,17 @@ PYTHON_GATES: tuple[PythonGate, ...] = (
         banner="--> Checking Agent Doc Path References...",
         script="tools/lint/check_agent_doc_paths.py",
         failure_msg="Agent docs reference non-existent repository paths (see JSON error above).",
-        staged_am_pattern=r"^\.agents/.*\.md$|(^|/)AGENTS\.md$",
+        staged_am_pattern=r"^\.agents/.*\.md$|(^|/)AGENTS\.md$|^tools/lint/check_agent_doc_paths\.py$",
+        check_deletes=True,
+    ),
+    PythonGate(
+        banner="--> Checking Documentation Links & OSS URLs...",
+        script="tools/lint/check_doc_links.py",
+        failure_msg=(
+            "Markdown docs contain broken relative links or forbidden internal URLs "
+            "(see JSON error above)."
+        ),
+        staged_am_pattern=r"\.md$|^tools/lint/check_(doc_links|agent_doc_paths)\.py$",
         check_deletes=True,
     ),
     PythonGate(
