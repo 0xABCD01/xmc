@@ -45,6 +45,15 @@ func TestStable2026b_ProfileContract(t *testing.T) {
 	profilecontract.Run(t, stable2026b())
 }
 
+// TestStable2026b_IsPreview checks that stable-2026b stays a preview profile until its release,
+// so dev_env requires --allow-preview-profile to install it.
+func TestStable2026b_IsPreview(t *testing.T) {
+	t.Parallel()
+	if got := profilecontract.ReleaseStatus(t, stable2026b()); got != profilecontract.StatusPreview {
+		t.Errorf("profile.yaml status = %q, want %q", got, profilecontract.StatusPreview)
+	}
+}
+
 func TestStable2026b_RendersCatalogWithImageTag(t *testing.T) {
 	t.Parallel()
 	profilecontract.AssertRendersComponents(t, stable2026b(), map[string]any{"components": map[string]any{"redpanda": map[string]any{"enabled": true},

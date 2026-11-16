@@ -38,6 +38,7 @@ from tools.common.tool_utils import (  # noqa: E402
     NC,
     RED,
     DeploymentConfig,
+    add_allow_preview_profile_flag,
     build_and_push_images,
     configure_docker_auth,
     deploy_component_profile,
@@ -47,6 +48,7 @@ from tools.common.tool_utils import (  # noqa: E402
     log_info,
     log_success,
     run_command,
+    select_component_profile,
     verify_helm_min_version,
 )
 from tools.dev_env.blueprint_compiler import compile_blueprint  # noqa: E402
@@ -121,6 +123,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
             f"or {DEFAULT_COMPONENT_PROFILE} on a fresh install)."
         ),
     )
+    add_allow_preview_profile_flag(parser)
 
     parsed = parser.parse_args(args)
 
@@ -212,6 +215,10 @@ def step_check(config: UpgradeConfig) -> None:
             f" '{config.gke_cluster}'. Ensure XMC has been deployed first (e.g."
             " via deploy_dev_env.sh or INSTALL.md)."
         )
+    try:
+        select_component_profile(config, config.namespace)
+    except (ValueError, RuntimeError, OSError) as e:
+        error_exit(str(e))
 
     log_success("All pre-flight checks and authentication steps passed successfully.")
 
@@ -578,6 +585,8 @@ def _build_resume_cmd(args: argparse.Namespace, config: UpgradeConfig, step: str
         cmd += f" --profile-values {shlex.quote(args.profile_values)}"
     if getattr(args, "component_profile", None):
         cmd += f" --profile {shlex.quote(args.component_profile)}"
+    if getattr(args, "allow_preview_profile", False):
+        cmd += " --allow-preview-profile"
     step_flag = "--only" if args.only else "--start-from"
     return f"{cmd} {step_flag} {step}"
 
@@ -625,6 +634,8 @@ def run_upgrade(args: argparse.Namespace) -> None:
         config = replace(config, profile_values=args.profile_values)
     if getattr(args, "component_profile", None):
         config = replace(config, component_profile=args.component_profile)
+    if getattr(args, "allow_preview_profile", False):
+        config = replace(config, allow_preview_profile=True)
     run_pipeline(args, config, STEPS)
 
 

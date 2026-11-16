@@ -16,6 +16,9 @@ limitations under the License.
 
 # `stable-2026b` Component Profile
 
+> [!WARNING]
+> **Preview profile.** `stable-2026b` is not released yet (`status: preview` in [`profile.yaml`](profile.yaml)). Its catalog, values and charts may change incompatibly before release, and it is not covered by the GA lock that protects `stable-2026a`. dev_env installs or switches to it only with `--profile stable-2026b --allow-preview-profile`. At release, `status` flips to `stable` without renaming the profile.
+
 This directory is the `stable-2026b` profile: a Helm meta-chart (`xmc-profile-stable-2026b`) that renders the `Component` custom resources (`components.xmc.dev/v1alpha1`) of its catalog from a single admin values file. It requires XMC `1.0.1+`, whose `xmc-bridge` selects embedded component charts by the `xmc.dev/profile` label of each `Component`.
 
 The meta-chart works exactly like [`stable-2026a`](../stable-2026a/README.md): the same values contract, admin workflow (render, lint, install), teardown rules and rendering helpers apply. Replace `stable-2026a` with `stable-2026b` in the commands there.
@@ -35,7 +38,7 @@ A metadata-only component directory holds only `Chart.yaml`, `values.yaml` and `
 
 ## Selecting the Profile
 
-- **dev_env:** pass `--profile stable-2026b` to `dev_env.py gke-deploy` or `gke-upgrade` (see [`tools/dev_env/README.md`](../../../tools/dev_env/README.md)). Without `--profile`, dev_env keeps the profile of the installed `xmc-profile` release (read from its chart name) and installs `stable-2026a` only when there is none, so switching always needs an explicit `--profile`.
+- **dev_env:** pass `--profile stable-2026b --allow-preview-profile` to `dev_env.py gke-deploy` or `gke-upgrade` (see [`tools/dev_env/README.md`](../../../tools/dev_env/README.md)). Without `--allow-preview-profile`, dev_env refuses to install or switch to this preview profile before changing anything; once installed, it is kept (with a warning) without the flag. Without `--profile`, dev_env keeps the profile of the installed `xmc-profile` release (read from its chart name) and installs `stable-2026a` only when there is none, so switching always needs an explicit `--profile`.
 - **Helm:** install or upgrade the `xmc-profile` release from this directory, for example `helm upgrade --install --reset-then-reuse-values xmc-profile deploy/profiles/stable-2026b -n xmc -f profile-values.yaml --wait`.
 
 ## Switching Between `stable-2026a` and `stable-2026b`

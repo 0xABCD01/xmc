@@ -21,3 +21,6 @@ minXmcVersion: "1.0.1"
 supportWindow:
   start: "2027-01"
   end: "2027-06"
+# Release status: preview | stable (stable when omitted). Preview profiles are not released, may
+# change incompatibly and need dev_env --allow-preview-profile; flip to stable at release.
+status: preview

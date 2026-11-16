@@ -31,6 +31,7 @@ if str(_REPO_ROOT) not in sys.path:
 from tools.common.tool_utils import (  # noqa: E402
     COMPONENT_PROFILES,
     DEFAULT_COMPONENT_PROFILE,
+    add_allow_preview_profile_flag,
     ensure_venv,
     log_error,
 )
@@ -300,7 +301,7 @@ def _add_common_config_flags(p: argparse.ArgumentParser) -> None:
 
 
 def _add_component_profile_flag(p: argparse.ArgumentParser) -> None:
-    """Configures the --profile flag of commands that deploy the xmc-profile release."""
+    """Configures the --profile and --allow-preview-profile flags of xmc-profile commands."""
     p.add_argument(
         "--profile",
         dest="component_profile",
@@ -311,6 +312,7 @@ def _add_component_profile_flag(p: argparse.ArgumentParser) -> None:
             f"or {DEFAULT_COMPONENT_PROFILE} on a fresh install)."
         ),
     )
+    add_allow_preview_profile_flag(p)
 
 
 def _add_deploy_flags(p: argparse.ArgumentParser, *, is_gke: bool) -> None:

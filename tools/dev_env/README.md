@@ -275,7 +275,8 @@ python3 tools/dev_env/dev_env.py gke-deploy \
 - `--skip-migrations`: Skip automatic Cloud Spanner database schema migrations.
 - `--skip-verification`: Skip environment health verification step.
 - `--profile-values`: Optional values YAML file passed to `helm -f` when deploying `xmc-profile` (requires `helm >= 3.14.0`).
-- `--profile`: Component profile deployed as `xmc-profile`: `stable-2026a` or [`stable-2026b`](../../deploy/profiles/stable-2026b/README.md). Without it, the installed profile is kept (read from the `xmc-profile` release's chart name), and `stable-2026a` is installed only on a fresh cluster.
+- `--profile`: Component profile deployed as `xmc-profile`: `stable-2026a` or [`stable-2026b`](../../deploy/profiles/stable-2026b/README.md) (preview). Without it, the installed profile is kept (read from the `xmc-profile` release's chart name), and `stable-2026a` is installed only on a fresh cluster.
+- `--allow-preview-profile`: Required with `--profile` to install a preview profile (`status: preview` in its `profile.yaml`, today `stable-2026b`). Without it, the pre-flight checks fail before changing anything.
 
 > [!NOTE]
 > The `compile` step (and the `app` step of `gke-upgrade`) deletes `ctk-out/<deployment_name>/.ghpc/staged/` before running `gcluster create --force`, so Helm templates removed from the repository are not re-deployed from a stale staged copy. It also passes a SHA-256 of `deploy/helm` as the `helm_chart_content_hash` blueprint variable (recorded in the umbrella Helm release description), so template-only chart changes trigger a real Helm upgrade that prunes removed objects.
@@ -306,7 +307,8 @@ python3 tools/dev_env/dev_env.py gke-upgrade \
 - `--start-from`: Start upgrade from a specific step (`check`, `migrate`, `images`, `app`, `restart`, `verify`).
 - `--only`: Execute only a single upgrade step (`check`, `migrate`, `images`, `app`, `restart`, `verify`).
 - `--profile-values`: Optional values YAML file passed to `helm -f` when deploying `xmc-profile` (requires `helm >= 3.14.0`).
-- `--profile`: Component profile deployed as `xmc-profile`: `stable-2026a` or `stable-2026b`. Without it, the installed profile is kept; switching needs an explicit `--profile` and upgrades the same release (see [switching profiles](../../deploy/profiles/stable-2026b/README.md#switching-between-stable-2026a-and-stable-2026b)).
+- `--profile`: Component profile deployed as `xmc-profile`: `stable-2026a` or `stable-2026b` (preview). Without it, the installed profile is kept; switching needs an explicit `--profile` and upgrades the same release (see [switching profiles](../../deploy/profiles/stable-2026b/README.md#switching-between-stable-2026a-and-stable-2026b)).
+- `--allow-preview-profile`: Required to switch to a preview profile (`status: preview` in its `profile.yaml`, today `stable-2026b`); the `check` step fails before changing anything without it. An installed preview profile that is kept (no `--profile`, or the same one) only logs a warning.
 
 ---
 

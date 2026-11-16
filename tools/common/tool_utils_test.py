@@ -15,6 +15,7 @@
 """Unit tests for tool_utils module."""
 
 import argparse
+import contextlib
 import io
 import json
 import os
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
@@ -32,11 +34,14 @@ from unittest.mock import ANY, MagicMock, patch
 from tools.common.tool_utils import (
     COMPONENT_PROFILES,
     DEFAULT_COMPONENT_PROFILE,
+    PROFILE_STATUS_PREVIEW,
+    PROFILE_STATUS_STABLE,
     DeploymentConfig,
     HandledError,
     _bootstrap_venv,
     _resolve_profile_chart,
     build_and_push_images,
+    component_profile_status,
     configure_docker_auth,
     deploy_component_profile,
     ensure_venv,
@@ -768,6 +773,31 @@ class TestBuildAndPushImages(unittest.TestCase):
             build_and_push_images(config)
 
 
+_NOT_FOUND = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="not found")
+
+
+def _helm_list(installed: str | None) -> subprocess.CompletedProcess:
+    """Returns a 'helm list' result that lists the xmc-profile release of installed, if any."""
+    charts = [f"xmc-profile-{installed}-1.0.0"] if installed else []
+    releases = [{"name": "xmc-profile", "chart": chart} for chart in charts]
+    return subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=json.dumps(releases), stderr=""
+    )
+
+
+@contextlib.contextmanager
+def _profile_dir(profile_yaml: str) -> Iterator[Path]:
+    """Yields a temporary profile chart with profile_yaml that _resolve_profile_chart resolves."""
+    with tempfile.TemporaryDirectory() as tmp:
+        chart_dir = Path(tmp) / "stable-2099z"
+        chart_dir.mkdir()
+        (chart_dir / "profile.yaml").write_text(profile_yaml, encoding="utf-8")
+        with patch(
+            "tools.common.tool_utils._resolve_profile_chart", side_effect=lambda p: Path(tmp) / p
+        ):
+            yield chart_dir
+
+
 class TestComponentProfileAndFlags(unittest.TestCase):
     """Tests for parse_bool_flag and deploy_component_profile."""
 
@@ -812,10 +842,10 @@ class TestComponentProfileAndFlags(unittest.TestCase):
     @patch("tools.common.tool_utils.run_command")
     def test_deploy_component_profile_selected_profile(self, mock_run: MagicMock) -> None:
         """The selected profile's chart directory is upgraded as the xmc-profile release."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=1, stdout="", stderr="not found"
+        mock_run.side_effect = [_helm_list(None), *[_NOT_FOUND] * 3]
+        deploy_component_profile(
+            replace(self.base_config, component_profile="stable-2026b", allow_preview_profile=True)
         )
-        deploy_component_profile(replace(self.base_config, component_profile="stable-2026b"))
         cmd = mock_run.call_args[0][0]
         self.assertEqual(cmd[4], "xmc-profile")
         self.assertTrue(cmd[5].endswith("deploy/profiles/stable-2026b"))
@@ -1028,14 +1058,79 @@ class TestComponentProfileAndFlags(unittest.TestCase):
                 self.assertTrue(mock_run.call_args[0][0][5].endswith(f"deploy/profiles/{want}"))
 
     @patch("tools.common.tool_utils.run_command")
-    def test_deploy_component_profile_explicit_profile_switches(self, mock_run: MagicMock) -> None:
-        """An explicit profile wins over the installed one, without listing the release."""
+    def test_deploy_component_profile_explicit_stable_profile_skips_listing(
+        self, mock_run: MagicMock
+    ) -> None:
+        """An explicit stable profile wins over the installed one, without listing the release."""
         mock_run.return_value = subprocess.CompletedProcess(
             args=[], returncode=1, stdout="", stderr="not found"
         )
-        deploy_component_profile(replace(self.base_config, component_profile="stable-2026b"))
+        deploy_component_profile(replace(self.base_config, component_profile="stable-2026a"))
         self.assertNotIn(["helm", "list"], [c[0][0][:2] for c in mock_run.call_args_list])
-        self.assertTrue(mock_run.call_args[0][0][5].endswith("deploy/profiles/stable-2026b"))
+        self.assertTrue(mock_run.call_args[0][0][5].endswith("deploy/profiles/stable-2026a"))
+
+    @patch("tools.common.tool_utils.log_warning")
+    @patch("tools.common.tool_utils.run_command")
+    def test_deploy_component_profile_preview_gate(
+        self, mock_run: MagicMock, mock_warn: MagicMock
+    ) -> None:
+        """Installing or switching to a preview profile needs the flag; keeping one only warns."""
+        cases = {
+            # name: (installed, --profile, --allow-preview-profile, error regex or None)
+            "fresh install without flag": (None, "stable-2026b", False, "install the preview"),
+            "fresh install with flag": (None, "stable-2026b", True, None),
+            "switch a to b without flag": ("stable-2026a", "stable-2026b", False, "switch from"),
+            "switch a to b with flag": ("stable-2026a", "stable-2026b", True, None),
+            "kept installed preview": ("stable-2026b", None, False, None),
+            "same installed preview": ("stable-2026b", "stable-2026b", False, None),
+            "stable switch b to a": ("stable-2026b", "stable-2026a", False, None),
+        }
+        for name, (installed, profile, allow, want_err) in cases.items():
+            with self.subTest(name):
+                mock_run.reset_mock()
+                mock_warn.reset_mock()
+                mock_run.side_effect = [_helm_list(installed), *[_NOT_FOUND] * 3]
+                cfg = replace(
+                    self.base_config, component_profile=profile, allow_preview_profile=allow
+                )
+                if want_err:
+                    with self.assertRaisesRegex(ValueError, f"{want_err}.*--allow-preview-profile"):
+                        deploy_component_profile(cfg)
+                    self.assertEqual(mock_run.call_count, 1)  # Only the read-only helm list.
+                    continue
+                deploy_component_profile(cfg)
+                self.assertEqual(mock_run.call_args[0][0][:2], ["helm", "upgrade"])
+                deployed = mock_run.call_args[0][0][5]
+                self.assertEqual(mock_warn.called, deployed.endswith("stable-2026b"))
+
+    def test_component_profile_status(self) -> None:
+        """Shipped profiles report their status; a missing status is stable."""
+        self.assertEqual(component_profile_status("stable-2026a"), PROFILE_STATUS_STABLE)
+        self.assertEqual(component_profile_status("stable-2026b"), PROFILE_STATUS_PREVIEW)
+        cases = {
+            "omitted": ("name: x\n", PROFILE_STATUS_STABLE),
+            "quoted preview": ('name: x\nstatus: "preview"  # until release\n', "preview"),
+            "nested key ignored": ("supportWindow:\n  status: bogus\n", PROFILE_STATUS_STABLE),
+        }
+        for name, (content, want) in cases.items():
+            with self.subTest(name), _profile_dir(content) as chart_dir:
+                self.assertEqual(component_profile_status(chart_dir.name), want)
+
+    @patch("tools.common.tool_utils.run_command")
+    def test_component_profile_status_malformed(self, mock_run: MagicMock) -> None:
+        """A malformed status fails status reads and deploys before any command runs."""
+        for content in ("status: beta\n", "status:\n", "status: preview\nstatus: stable\n"):
+            with self.subTest(content=content), _profile_dir(content) as chart_dir:
+                with self.assertRaisesRegex(ValueError, "status must be"):
+                    component_profile_status(chart_dir.name)
+                with (
+                    patch("tools.common.tool_utils.COMPONENT_PROFILES", (chart_dir.name,)),
+                    self.assertRaisesRegex(ValueError, "status must be"),
+                ):
+                    deploy_component_profile(
+                        replace(self.base_config, component_profile=chart_dir.name)
+                    )
+                mock_run.assert_not_called()
 
     @patch("tools.common.tool_utils.run_command")
     def test_deploy_component_profile_unknown_installed_chart(self, mock_run: MagicMock) -> None:
@@ -1118,6 +1213,7 @@ class TestComponentProfileAndFlags(unittest.TestCase):
         self.assertEqual(mock_run.call_count, 3)
 
         with tempfile.TemporaryDirectory() as empty_chart_dir:
+            Path(empty_chart_dir, "profile.yaml").write_text("name: x\n", encoding="utf-8")
             mock_run.reset_mock()
             mock_run.side_effect = None
             mock_run.return_value = subprocess.CompletedProcess(

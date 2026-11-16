@@ -35,6 +35,9 @@ _LOGGER = logging.getLogger(__name__)
 # Component profiles under deploy/profiles that dev_env can install as the xmc-profile release.
 COMPONENT_PROFILES = ("stable-2026a", "stable-2026b")
 DEFAULT_COMPONENT_PROFILE = "stable-2026a"
+# Release statuses a profile.yaml may declare; a profile without a status field is stable.
+PROFILE_STATUS_PREVIEW = "preview"
+PROFILE_STATUS_STABLE = "stable"
 
 
 @dataclass(kw_only=True)
@@ -54,6 +57,8 @@ class DeploymentConfig:
     profile_values: str | None = None
     # None keeps the installed xmc-profile release's profile (DEFAULT_COMPONENT_PROFILE on a fresh install).
     component_profile: str | None = None
+    # Allows installing or switching to a profile whose profile.yaml declares status: preview.
+    allow_preview_profile: bool = False
 
     @property
     def gke_cluster(self) -> str:
@@ -435,6 +440,7 @@ def load_and_validate_config(
 # Color constants for terminal logging
 BLUE = "\033[0;34m"
 GREEN = "\033[0;32m"
+YELLOW = "\033[0;33m"
 RED = "\033[0;31m"
 NC = "\033[0m"  # No Color
 
@@ -442,6 +448,11 @@ NC = "\033[0m"  # No Color
 def log_info(msg: str, stream: TextIO | None = None) -> None:
     """Logs informational messages in blue text to stream (default: stdout)."""
     print(f"\n{BLUE}[INFO] {msg}{NC}", file=stream)
+
+
+def log_warning(msg: str) -> None:
+    """Logs warning messages in yellow text to stderr."""
+    print(f"\n{YELLOW}[WARN] {msg}{NC}", file=sys.stderr)
 
 
 def log_success(msg: str) -> None:
@@ -866,17 +877,93 @@ def _installed_component_profile(namespace: str, release_name: str = "xmc-profil
     return match["profile"]
 
 
-def _select_component_profile(config: DeploymentConfig, namespace: str) -> str:
-    """Returns config.component_profile, else the installed profile, else the default profile."""
-    if config.component_profile:
-        return config.component_profile
-    installed = _installed_component_profile(namespace)
-    if installed:
+_PROFILE_STATUS_RE = re.compile(r"^status:[ \t]*(?P<value>[^#\n]*?)[ \t]*(?:#.*)?$", re.MULTILINE)
+
+
+def component_profile_status(profile: str) -> str:
+    """Returns the release status that profile's profile.yaml declares, stable when omitted.
+
+    Raises:
+        OSError: If the profile.yaml of profile cannot be read.
+        ValueError: If the top-level status field is repeated or not preview or stable.
+    """
+    path = _resolve_profile_chart(profile) / "profile.yaml"
+    values = [v.strip("\"'") for v in _PROFILE_STATUS_RE.findall(path.read_text(encoding="utf-8"))]
+    if not values:
+        return PROFILE_STATUS_STABLE
+    if len(values) == 1 and values[0] in (PROFILE_STATUS_PREVIEW, PROFILE_STATUS_STABLE):
+        return values[0]
+    raise ValueError(
+        f"{path}: status must be '{PROFILE_STATUS_PREVIEW}' or '{PROFILE_STATUS_STABLE}' "
+        f"(or omitted for {PROFILE_STATUS_STABLE}), found {values}."
+    )
+
+
+def check_component_profile_status(
+    profile: str, installed: str | None, *, allow_preview: bool
+) -> None:
+    """Rejects installing or switching to a preview profile unless allow_preview is set.
+
+    Keeping an installed preview profile (profile == installed) only logs a warning.
+
+    Args:
+        profile: Component profile about to be deployed as the xmc-profile release.
+        installed: Profile of the installed xmc-profile release, or None on a fresh install.
+        allow_preview: Whether --allow-preview-profile was passed.
+
+    Raises:
+        ValueError: If profile is a preview profile that is not installed and allow_preview is
+            False, or its profile.yaml status is malformed.
+    """
+    if component_profile_status(profile) != PROFILE_STATUS_PREVIEW:
+        return
+    caveat = "it is not released and may change incompatibly before release"
+    if profile == installed:
+        log_warning(f"Keeping the installed preview component profile ({profile}); {caveat}.")
+        return
+    if not allow_preview:
+        action = f"switch from {installed} to" if installed else "install"
+        raise ValueError(
+            f"Refusing to {action} the preview component profile {profile}: {caveat}. "
+            f"Pass --allow-preview-profile with --profile {profile} to proceed."
+        )
+    log_warning(f"Deploying the preview component profile ({profile}); {caveat}.")
+
+
+def add_allow_preview_profile_flag(parser: argparse.ArgumentParser) -> None:
+    """Adds --allow-preview-profile to a parser that already takes --profile."""
+    parser.add_argument(
+        "--allow-preview-profile",
+        action="store_true",
+        help=(
+            "Allow installing or switching to a preview component profile (profile.yaml "
+            "status: preview), which is not released and may change incompatibly."
+        ),
+    )
+
+
+def select_component_profile(config: DeploymentConfig, namespace: str) -> str:
+    """Returns the profile to deploy after checking that its release status allows it.
+
+    The profile is config.component_profile, else the installed profile, else the default
+    profile. Only reads the cluster, so callers can run it before changing anything.
+
+    Raises:
+        ValueError: If the selected profile is unknown, or a preview profile that
+            check_component_profile_status rejects.
+        RuntimeError: If the installed profile cannot be determined.
+    """
+    _validate_component_profile_config(config)
+    explicit = config.component_profile
+    needs_installed = not explicit or component_profile_status(explicit) == PROFILE_STATUS_PREVIEW
+    installed = _installed_component_profile(namespace) if needs_installed else None
+    profile = explicit or installed or DEFAULT_COMPONENT_PROFILE
+    if installed and not explicit:
         log_info(
             f"Keeping the installed component profile ({installed}); pass --profile to switch."
         )
-        return installed
-    return DEFAULT_COMPONENT_PROFILE
+    check_component_profile_status(profile, installed, allow_preview=config.allow_preview_profile)
+    return profile
 
 
 def _prepare_profile_switch(
@@ -904,7 +991,8 @@ def deploy_component_profile(config: DeploymentConfig) -> None:
     """Deploys an XMC component profile as the xmc-profile release.
 
     The profile is config.component_profile when set, otherwise the installed profile, and
-    stable-2026a only on a fresh install. Switching profiles upgrades the same release to the
+    stable-2026a only on a fresh install. Installing or switching to a preview profile needs
+    config.allow_preview_profile. Switching profiles upgrades the same release to the
     other profile chart: disabled Components the new profile no longer ships are unprotected
     and their stored values stripped first, so Helm can prune them.
 
@@ -912,14 +1000,14 @@ def deploy_component_profile(config: DeploymentConfig) -> None:
         config: Loaded DeploymentConfig instance.
 
     Raises:
-        ValueError: If config.component_profile is not one of COMPONENT_PROFILES.
+        ValueError: If config.component_profile is not one of COMPONENT_PROFILES, or selects
+            a preview profile without config.allow_preview_profile.
         FileNotFoundError: If config.profile_values is specified and missing.
         RuntimeError: If the installed profile cannot be determined, or a component the
             profile does not ship is still enabled.
     """
-    _validate_component_profile_config(config)
     ns = config.namespace or "xmc"
-    profile = _select_component_profile(config, ns)
+    profile = select_component_profile(config, ns)
     chart_dir = _resolve_profile_chart(profile)
     sanitized = _prepare_profile_switch(ns, profile, _profile_catalog_names(chart_dir))
     with tempfile.TemporaryDirectory() as tmp_dir:
