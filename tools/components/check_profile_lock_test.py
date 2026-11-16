@@ -321,11 +321,21 @@ class RepositoryCodeownersAlignmentTest(unittest.TestCase):
     """Verifies that the repository CODEOWNERS matches the OWNERS reviewer pool."""
 
     def test_codeowners_matches_owners_pool(self) -> None:
-        repo_root = Path(__file__).resolve().parents[2]
+        repo_root = next(
+            (
+                base
+                for base in (
+                    Path(__file__).absolute().parents[2],
+                    Path(__file__).resolve().parents[2],
+                )
+                if (base / "OWNERS").is_file() and (base / "CODEOWNERS").is_file()
+            ),
+            Path(__file__).resolve().parents[2],
+        )
         owners_file = repo_root / "OWNERS"
         codeowners_file = repo_root / "CODEOWNERS"
-        if not owners_file.is_file() or not codeowners_file.is_file():
-            return
+        self.assertTrue(owners_file.is_file(), f"Missing OWNERS file at {owners_file}")
+        self.assertTrue(codeowners_file.is_file(), f"Missing CODEOWNERS file at {codeowners_file}")
 
         owners = [
             line.split("#", 1)[0].strip()
