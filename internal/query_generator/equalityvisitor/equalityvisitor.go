@@ -72,7 +72,7 @@ func propagateError(err error, ctx string) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%v: %v", ctx, err)
+	return fmt.Errorf("%s: %w", ctx, err)
 }
 
 // DisjunctionExp handles expressions with the disjunction type
