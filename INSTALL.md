@@ -97,6 +97,26 @@ The XMC services require OCI container images built from the codebase. You must 
    image_tag: "<IMAGE_TAG>"
    ```
 
+6. **Grant Artifact Registry reader access to GKE node service accounts** (automated in Cluster Toolkit v2 via `worker_project_ids`; required manually when deploying to existing GKE Autopilot clusters or MultiKueue worker projects via standalone Helm):
+   GKE kubelets pull container images using the **node's IAM service account** rather than the pod's Workload Identity service account. On GKE Autopilot clusters (and default-SA node pools), nodes use the Compute Engine default service account (`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`).
+   - **Cluster Toolkit v2 (`deploy/ctk_v2`)**: Set `worker_project_ids: ["<WORKER_PROJECT_ID_1>", ...]` in `xmanager-cloud-deployment.yaml`. The `default_compute_sa_artifact_registry_reader` module automatically grants `roles/artifactregistry.reader` to the host and worker Compute Engine default service accounts.
+   - **Standalone Helm / Existing Clusters**: Grant `roles/artifactregistry.reader` on the image registry project (and each worker project) to the Compute Engine default service accounts:
+     ```bash
+     HOST_PROJECT_ID="<PROJECT_ID>"
+     for SA_PROJECT in "${HOST_PROJECT_ID}" <WORKER_PROJECT_IDS...>; do
+       PROJECT_NUM=$(gcloud projects describe "${SA_PROJECT}" --format="value(projectNumber)")
+       COMPUTE_SA="serviceAccount:${PROJECT_NUM}-compute@developer.gserviceaccount.com"
+       gcloud projects add-iam-policy-binding "${HOST_PROJECT_ID}" \
+         --member="${COMPUTE_SA}" \
+         --role="roles/artifactregistry.reader"
+       if [ "${SA_PROJECT}" != "${HOST_PROJECT_ID}" ]; then
+         gcloud projects add-iam-policy-binding "${SA_PROJECT}" \
+           --member="${COMPUTE_SA}" \
+           --role="roles/artifactregistry.reader"
+       fi
+     done
+     ```
+
 ### 3. DNS and Domain Name Configuration
 
 XMC relies on GKE Gateway API to expose HTTP, HTTPS, and gRPC endpoints externally on a single global external static IP address.
@@ -603,6 +623,7 @@ Supply these parameters in your Cluster Toolkit overrides file (`xmanager-cloud-
 | Parameter Name | Required? | Default Value | Used By / Description |
 |---|---|---|---|
 | `project_id` | **Yes** | - | Target Google Cloud Project ID |
+| `worker_project_ids` | No | `[]` | Additional GCP project IDs hosting MultiKueue worker clusters whose Compute Engine default service accounts receive `roles/artifactregistry.reader` |
 | `deployment_name` | **Yes** | - | Unique prefix for resource naming (e.g. `xmc-v2-run`) |
 | `region` | **Yes** | - | Google Cloud region for resource provisioning (e.g. `us-west1`) |
 | `domain_name` | **Yes** | - | Base DNS domain name for external endpoints (e.g. `example.com`) |

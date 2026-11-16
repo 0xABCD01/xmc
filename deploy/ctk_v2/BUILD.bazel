@@ -21,7 +21,13 @@ exports_files(["verify_xmc.py"])
 # is deployed onto agree with each other.
 filegroup(
     name = "blueprint",
-    srcs = ["xmanager-cloud.yaml"],
+    srcs = [
+        "xmanager-cloud.yaml",
+        "xmc-deployment-template.yaml",
+        "modules/artifact-registry-iam/main.tf",
+        "modules/artifact-registry-iam/variables.tf",
+        "modules/artifact-registry-iam/versions.tf",
+    ],
     visibility = ["//visibility:public"],
 )
 

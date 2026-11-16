@@ -28,6 +28,11 @@ vars:
   # The Google Cloud Project ID to deploy into
   project_id: YOUR_PROJECT_ID
 
+  # Optional: Additional GCP project IDs hosting MultiKueue worker clusters
+  # whose Compute Engine default service accounts require roles/artifactregistry.reader
+  # to pull private images from the host and worker projects.
+  worker_project_ids: []
+
   # The Google Cloud Region to deploy into
   region: us-central1
 

@@ -17,6 +17,7 @@ blueprint_name: xmanager-on-cloud-v2
 vars:
   deployment_name: xmc-v2-test
   project_id:
+  worker_project_ids: [] # Additional GCP project IDs hosting MultiKueue worker clusters
 
   region:
   domain_name:          # Base domain name (e.g. example.com)
@@ -96,6 +97,7 @@ deployment_groups:
     source: community/modules/project/service-enablement
     settings:
       gcp_service_list: '$(concat([
+        "artifactregistry.googleapis.com",
         "compute.googleapis.com",
         "container.googleapis.com",
         "redis.googleapis.com",
@@ -157,6 +159,12 @@ deployment_groups:
     settings:
       project_id: $(vars.project_id)
       service_account_email: $(workload_service_account.service_account_email)
+
+  - id: default_compute_sa_artifact_registry_reader
+    source: ./deploy/ctk_v2/modules/artifact-registry-iam
+    settings:
+      project_id: $(vars.project_id)
+      worker_project_ids: $(vars.worker_project_ids)
 
   - id: log_monitor_service_account
     source: modules/project/service-account
