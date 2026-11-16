@@ -25,7 +25,7 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -34,18 +34,9 @@ from tools.lint import (  # noqa: E402
     precommit_gates as gates,
 )
 
-_LICENSE_IGNORES = (
-    "**/node_modules/**",
-    "**/.angular/**",
-    "**/dist/**",
-    "**/venv/**",
-    "**/ctk-out/**",
-    "**.json",
-    "**.lock",
-    "pyproject.toml",
-    "package.json",
-    "go.mod",
-    "go.sum",
+_LICENSE_IGNORE_PATTERNS = (
+    "**/node_modules/** **/.angular/** **/dist/** **/venv/** **/ctk-out/** "
+    "**.json **.lock pyproject.toml package.json go.mod go.sum"
 )
 
 
@@ -54,73 +45,74 @@ def check_bazel(ctx: gates.RunContext) -> None:
     buildifier = gates.resolve_go_tool(
         ctx,
         "buildifier",
-        "buildifier not found. To install: go install github.com/bazelbuild/buildtools/buildifier@latest",
+        "buildifier not found. Install: go install github.com/bazelbuild/buildtools/buildifier@latest",
     )
     if not buildifier:
         return
     print("--> Running Bazel Formatter & Linter (Buildifier)...")
     files = gates.walk_repo_files(
-        ["."],
-        suffixes=(".bzl",),
-        exact_names=("BUILD", "BUILD.bazel", "WORKSPACE", "MODULE.bazel"),
+        ["."], suffixes=(".bzl",), exact_names=("BUILD", "BUILD.bazel", "WORKSPACE", "MODULE.bazel")
     )
-    if not files:
-        return
     gates.run_mode_command(
         ctx,
         [buildifier],
-        check_args=["-lint=warn", "-warnings=unused-variable", "-mode=check", *files],
-        fix_args=["-lint=fix", "-warnings=unused-variable", "-mode=fix", *files],
+        check_args=["-lint=warn", "-warnings=unused-variable", "-mode=check"],
+        fix_args=["-lint=fix", "-warnings=unused-variable", "-mode=fix"],
         failure_msg="Bazel buildifier check failed.",
+        files=files,
     )
+
+
+def _check_gofmt(ctx: gates.RunContext) -> None:
+    if not shutil.which("gofmt"):
+        return
+    print("--> Running Go Formatter (gofmt)...")
+    if ctx.mode == "check":
+        res = gates.exec_cmd(["gofmt", "-s", "-l", "."], capture=True)
+        if res.returncode != 0:
+            if res.stderr:
+                print(res.stderr.strip(), file=sys.stderr)
+            ctx.fail("gofmt check failed.")
+        elif bad := [line for line in res.stdout.splitlines() if line and "vendor/" not in line]:
+            print("❌ Unformatted Go files found:\n" + "\n".join(bad))
+            ctx.failed = True
+        return
+    for batch in gates.chunked(gates.collect_target_files("fix", staged_regex=r"\.go$"), 500):
+        if gates.exec_cmd(["gofmt", "-s", "-w", *batch]).returncode != 0:
+            ctx.fail("gofmt formatting failed.")
 
 
 def check_go(ctx: gates.RunContext) -> None:
     """Runs `gofmt`, `golangci-lint`, Go determinism checker, and `go mod tidy`."""
-    if shutil.which("gofmt"):
-        print("--> Running Go Formatter (gofmt)...")
-        res = gates.exec_cmd(["gofmt", "-s", "-l", "."], capture=True, quiet_err=True)
-        bad = [line for line in res.stdout.splitlines() if line and "vendor/" not in line]
-        if bad:
-            print("❌ Unformatted Go files found:\n" + "\n".join(bad))
-            if ctx.mode == "check":
-                ctx.failed = True
-        if ctx.mode == "fix" and (
-            go_files := gates.walk_repo_files(
-                ["."], suffixes=(".go",), excluded_dirs=frozenset({"vendor", ".git"})
-            )
-        ):
-            for idx in range(0, len(go_files), 500):
-                gates.exec_cmd(["gofmt", "-s", "-w", *go_files[idx : idx + 500]])
+    _check_gofmt(ctx)
     if linter := gates.resolve_go_tool(
         ctx,
         "golangci-lint",
         "golangci-lint not found. Go linting skipped.",
-        "To install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.6",
+        "Install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.6",
     ):
         print("--> Running Golang Linter (golangci-lint)...")
-        msg = (
-            "golangci-lint check failed."
-            if ctx.mode == "check"
-            else "golangci-lint run --fix failed or found unfixed issues."
-        )
         gates.run_mode_command(
-            ctx, [linter], check_args=["run"], fix_args=["run", "--fix"], failure_msg=msg
+            ctx,
+            [linter],
+            check_args=["run"],
+            fix_args=["run", "--fix"],
+            failure_msg="golangci-lint failed.",
         )
     if not shutil.which("go"):
         return
-    if os.path.isdir("tools/lint/check_go_determinism"):
+    if (gates.REPO_ROOT / "tools/lint/check_go_determinism").is_dir():
         print("--> Running Go Test Determinism & State Leakage Checker...")
         if gates.exec_cmd(["go", "run", "./tools/lint/check_go_determinism"]).returncode != 0:
             ctx.failed = True
     print("--> Checking Go Module Dependencies (go mod tidy)...")
-    if ctx.mode != "check":
-        gates.exec_cmd(["go", "mod", "tidy"])
-    elif (
-        gates.exec_cmd(["go", "mod", "tidy", "-diff"], quiet_out=True, quiet_err=True).returncode
-        != 0
-    ):
-        ctx.fail("Unused or missing Go module dependencies found. Run 'go mod tidy' to sync.")
+    gates.run_mode_command(
+        ctx,
+        ["go", "mod", "tidy"],
+        check_args=["-diff"],
+        fix_args=[],
+        failure_msg="Unused or missing Go module dependencies found. Run 'go mod tidy' to sync.",
+    )
 
 
 def check_ui(ctx: gates.RunContext) -> None:
@@ -133,24 +125,21 @@ def check_ui(ctx: gates.RunContext) -> None:
     )
     if not files:
         return
-    if prettier := gates.resolve_ui_binary(ctx, "prettier"):
-        print("--> Running UI Formatter (Prettier)...")
-        gates.run_mode_command(
-            ctx,
-            [prettier, "--config", "cmd/ui/.prettierrc"],
-            check_args=["--check", *files],
-            fix_args=["--write", *files],
-            failure_msg="Prettier check failed.",
-        )
-    if eslint := gates.resolve_ui_binary(ctx, "eslint"):
-        print("--> Running UI Linter (ESLint)...")
-        gates.run_mode_command(
-            ctx,
-            [eslint, "--config", "cmd/ui/eslint.config.js"],
-            check_args=files,
-            fix_args=["--fix", *files],
-            failure_msg="ESLint check failed.",
-        )
+    for tool, cfg, chk, fx, title in (
+        ("prettier", "cmd/ui/.prettierrc", ["--check"], ["--write"], "Formatter (Prettier)"),
+        ("eslint", "cmd/ui/eslint.config.js", [], ["--fix"], "Linter (ESLint)"),
+    ):
+        if binary := gates.resolve_ui_binary(ctx, tool):
+            print(f"--> Running UI {title}...")
+            gates.run_mode_command(
+                ctx,
+                [binary, "--config", cfg],
+                check_args=chk,
+                fix_args=fx,
+                failure_msg=f"{tool.capitalize()} check failed.",
+                files=files,
+                chunk_size=200,
+            )
 
 
 def check_license(ctx: gates.RunContext) -> None:
@@ -161,20 +150,29 @@ def check_license(ctx: gates.RunContext) -> None:
     if not addlicense:
         return
     print("--> Running License Header Check (addlicense)...")
-    flags = ["-c", "Google LLC", "-l", "apache"]
-    for pattern in _LICENSE_IGNORES:
-        flags.extend(["-ignore", pattern])
-    if ctx.mode == "check":
-        if gates.exec_cmd([addlicense, "-check", *flags, "."]).returncode != 0:
-            ctx.fail("License header check failed.")
-    elif staged := gates.git_staged_paths("ACMR"):
-        gates.exec_cmd([addlicense, *flags, *staged])
+    flags = [
+        "-c",
+        "Google LLC",
+        "-l",
+        "apache",
+        *(a for p in _LICENSE_IGNORE_PATTERNS.split() for a in ("-ignore", p)),
+    ]
+    files = ["."] if ctx.mode == "check" else gates.git_staged_paths("ACMR")
+    if files:
+        gates.run_mode_command(
+            ctx,
+            [addlicense],
+            check_args=["-check", *flags],
+            fix_args=flags,
+            failure_msg="License header check failed.",
+            files=files,
+        )
 
 
 def check_python(ctx: gates.RunContext) -> None:
     """Runs Ruff lint and formatting locally or inside Docker."""
-    files = gates.collect_target_files(
-        ctx.mode, staged_regex=r"\.py$", roots=(".",), suffixes=(".py",)
+    files = (
+        ["."] if ctx.mode == "check" else gates.collect_target_files("fix", staged_regex=r"\.py$")
     )
     if not files:
         return
@@ -185,48 +183,41 @@ def check_python(ctx: gates.RunContext) -> None:
         mount="/io",
         missing_label="Python linting skipped.",
         extra_dirs=(Path.home() / ".local/bin",),
-        as_user=True,
     )
     if not resolved:
         return
     base, is_docker = resolved
     print(
-        "--> Running Ruff via Docker container..."
-        if is_docker
-        else "--> Running Python Linter & Formatter (Ruff)..."
+        "--> Running Ruff (Docker)..." if is_docker else "--> Running Ruff (Linter & Formatter)..."
     )
     extra = ["--no-cache"] if is_docker else []
-    if ctx.mode == "check":
-        if gates.exec_cmd([*base, "check", *extra, *files]).returncode != 0:
-            ctx.fail("Ruff lint check failed.")
-        if gates.exec_cmd([*base, "format", "--check", *extra, *files]).returncode != 0:
-            ctx.fail("Ruff format check failed.")
-        return
-    gates.exec_cmd([*base, "check", "--fix", *extra, *files])
-    gates.exec_cmd([*base, "format", *extra, *files])
+    for sub, chk, fx, msg in (
+        (["check", *extra], [], ["--fix"], "Ruff lint check failed."),
+        (["format", *extra], ["--check"], [], "Ruff format check failed."),
+    ):
+        gates.run_mode_command(
+            ctx, [*base, *sub], check_args=chk, fix_args=fx, failure_msg=msg, files=files
+        )
 
 
 def _resolve_mypy_cmd() -> list[str]:
-    for path in ("./tools/common/venv/bin/mypy", "./tools/venv/bin/mypy"):
-        if os.access(path, os.X_OK):
-            return [path]
+    for venv_name in ("tools/common/venv", "tools/venv"):
+        for exe in ("bin/mypy", "Scripts/mypy.exe"):
+            if (candidate := gates.REPO_ROOT / venv_name / exe).is_file():
+                return [str(candidate)]
     if found := gates.resolve_binary("mypy", (Path.home() / ".local/bin",)):
         return [found]
     mod = [sys.executable, "-m", "mypy"]
     if gates.exec_cmd([*mod, "--version"], quiet_out=True, quiet_err=True).returncode == 0:
         return mod
     print("--> mypy not found; attempting automatic installation into ./tools/common/venv...")
-    venv_pip = "./tools/common/venv/bin/pip"
-    if not os.access(venv_pip, os.X_OK):
-        gates.exec_cmd(
-            [sys.executable, "-m", "venv", "./tools/common/venv"], quiet_out=True, quiet_err=True
-        )
-    install = [venv_pip, "install", "--quiet", "mypy"]
-    if (
-        os.access(venv_pip, os.X_OK)
-        and gates.exec_cmd(install, quiet_out=True, quiet_err=True).returncode == 0
-    ):
-        return ["./tools/common/venv/bin/mypy"]
+    venv = gates.REPO_ROOT / "tools/common/venv"
+    if not venv.exists():
+        gates.exec_cmd([sys.executable, "-m", "venv", str(venv)], quiet_out=True, quiet_err=True)
+    py = venv / ("Scripts/python.exe" if (venv / "Scripts/python.exe").is_file() else "bin/python")
+    install_cmd = [str(py), "-m", "pip", "install", "--quiet", "mypy"]
+    if py.is_file() and gates.exec_cmd(install_cmd, quiet_out=True, quiet_err=True).returncode == 0:
+        return [str(py), "-m", "mypy"]
     return []
 
 
@@ -237,10 +228,7 @@ def check_mypy(ctx: gates.RunContext) -> None:
     ):
         return
     if not (cmd := _resolve_mypy_cmd()):
-        ctx.fail(
-            "ERROR: mypy not found and automatic installation failed. "
-            "Install mypy (e.g. 'pip install mypy') to proceed."
-        )
+        ctx.fail("ERROR: mypy not found and automatic install failed (run 'pip install mypy').")
         return
     print("--> Running Mypy Static Type Checker...")
     if gates.exec_cmd(cmd).returncode != 0:
@@ -257,37 +245,30 @@ def _run_linter_phase(mode: str) -> bool:
     autostage = mode == "fix" and os.environ.get("XMC_PRECOMMIT_NO_AUTOSTAGE", "0") != "1"
     with tempfile.TemporaryDirectory() as tmpdir:
         state_path = str(Path(tmpdir) / "autostage.json") if autostage else None
-        if state_path is not None:
-            _autostage("snapshot", state_path)
-        check_bazel(ctx)
-        check_go(ctx)
+        if state_path is not None and not _autostage("snapshot", state_path):
+            print("❌ PRE-COMMIT HOOK FAILED: Unable to snapshot staged state for autostage.")
+            return False
+        for fn in (check_bazel, check_go):
+            fn(ctx)
         for gate in gates.PYTHON_GATES:
             gates.run_python_gate(ctx, gate)
-        check_ui(ctx)
-        check_license(ctx)
-        check_python(ctx)
-        check_mypy(ctx)
-        deploy_checks.check_deploy(ctx)
-        if mode == "fix" and state_path is not None and not _autostage("restage", state_path):
-            print(
-                '\n❌ PRE-COMMIT HOOK FAILED: Linters fixed files that were not fully staged (see "blocked" above).\n'
-                "   Please review the modified files (git diff), stage them, and re-run git commit."
-            )
-            return False
-        if (
-            mode == "fix"
-            and state_path is None
-            and gates.exec_cmd(["git", "diff", "--quiet"]).returncode != 0
-        ):
-            print(
-                "\n❌ PRE-COMMIT HOOK FAILED: Linters automatically fixed formatting issues in your code!\n"
-                "   Please review the modified files (git diff), stage them (git add -u), and re-run git commit."
-            )
-            return False
+        for fn in (check_ui, check_license, check_python, check_mypy, deploy_checks.check_deploy):
+            fn(ctx)
+        if mode == "fix":
+            if state_path is not None and not _autostage("restage", state_path):
+                print('\n❌ PRE-COMMIT HOOK FAILED: Linters fixed unstaged files (see "blocked").')
+                return False
+            if state_path is None and (rc := gates.exec_cmd(["git", "diff", "--quiet"]).returncode):
+                msg = (
+                    "git diff failed."
+                    if rc not in (0, 1)
+                    else "Linters fixed formatting! Stage and re-commit."
+                )
+                print(f"\n❌ PRE-COMMIT HOOK FAILED: {msg}")
+                return False
     if ctx.failed:
         print("=== ❌ Linter checks failed! ===")
-        return False
-    return True
+    return not ctx.failed
 
 
 def _run_test_phase(mode: str) -> bool:
@@ -301,18 +282,15 @@ def _run_test_phase(mode: str) -> bool:
         ctx.warn_missing("bazel not found. Affected Bazel unit tests skipped.")
         return not ctx.failed
     print("--> Running Affected Bazel Unit Tests...")
-    lockfile_clean = (
-        gates.exec_cmd(["git", "diff", "--quiet", "--", "MODULE.bazel.lock"]).returncode == 0
-    )
+    lock_diff = gates.exec_cmd(["git", "diff", "--quiet", "--", "MODULE.bazel.lock"])
     test_cmd = [sys.executable, "./tools/run_affected_tests.py", "--skip-emulator-check"]
-    if gates.exec_cmd(test_cmd, quiet_out=True).returncode != 0:
+    if gates.exec_cmd(test_cmd).returncode != 0:
         ctx.fail("Affected Bazel unit tests failed.")
-    if lockfile_clean:
+    if lock_diff.returncode == 0:
         gates.exec_cmd(["git", "checkout", "--", "MODULE.bazel.lock"], quiet_err=True)
     if ctx.failed:
         print("=== ❌ Pre-commit checks failed! ===")
-        return False
-    return True
+    return not ctx.failed
 
 
 def main(argv: Sequence[str] | None = None) -> int:
