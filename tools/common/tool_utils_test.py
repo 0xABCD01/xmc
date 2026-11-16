@@ -856,7 +856,7 @@ class TestComponentProfileAndFlags(unittest.TestCase):
     def test_deploy_component_profile_keeps_components_of_selected_catalog(
         self, mock_run: MagicMock
     ) -> None:
-        """stable-2026b ships vizier and hpo, so their disabled CRs and values are kept."""
+        """Upgrading an installed stable-2026b keeps the CRs and values of its vizier and hpo."""
         stored_values = json.dumps(
             {"components": {"vizier": {"enabled": False}, "hpo": {"enabled": False}}}
         )
@@ -874,12 +874,13 @@ class TestComponentProfileAndFlags(unittest.TestCase):
             }
         )
         mock_run.side_effect = [
+            _helm_list("stable-2026b"),
             subprocess.CompletedProcess(args=[], returncode=0, stdout=cluster_list, stderr=""),
             subprocess.CompletedProcess(args=[], returncode=0, stdout=stored_values, stderr=""),
             subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
         ]
         deploy_component_profile(replace(self.base_config, component_profile="stable-2026b"))
-        self.assertEqual(mock_run.call_count, 3)
+        self.assertEqual(mock_run.call_count, 4)
         upgrade_cmd = mock_run.call_args[0][0]
         self.assertEqual(upgrade_cmd[3], "--reset-then-reuse-values")
         self.assertTrue(upgrade_cmd[5].endswith("deploy/profiles/stable-2026b"))
