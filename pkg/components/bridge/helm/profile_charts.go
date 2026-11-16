@@ -44,14 +44,21 @@ var defaultProfileCharts = ProfileCharts{
 	DefaultProfile: stable2026a.EmbeddedCharts,
 }
 
-// resolve returns profile when charts has an entry for it, and DefaultProfile otherwise. A non-empty profile without
-// an entry (an unknown or skewed xmc.dev/profile label) is logged at WARN with the raw value.
+// resolve returns lookup(profile) and logs a non-empty profile without an entry (an unknown or skewed xmc.dev/profile
+// label) at WARN with the raw value. Only actuation calls it: drift checks run on every reconcile pass, so they use
+// lookup to keep an idle component from logging the same warning on every pass.
 func (charts ProfileCharts) resolve(ctx context.Context, profile string) string {
+	resolved := charts.lookup(profile)
+	if profile != "" && resolved != profile {
+		logging.Warn(ctx, "Unknown component profile label; using the default profile's embedded charts", "label", profile, "defaultProfile", DefaultProfile)
+	}
+	return resolved
+}
+
+// lookup returns profile when charts has an entry for it, and DefaultProfile otherwise.
+func (charts ProfileCharts) lookup(profile string) string {
 	if _, ok := charts[profile]; ok {
 		return profile
-	}
-	if profile != "" {
-		logging.Warn(ctx, "Unknown component profile label; using the default profile's embedded charts", "label", profile, "defaultProfile", DefaultProfile)
 	}
 	return DefaultProfile
 }

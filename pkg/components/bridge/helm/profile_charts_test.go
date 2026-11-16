@@ -57,6 +57,9 @@ func TestProfileChartsResolve(t *testing.T) {
 			if got := charts.resolve(ctx, tc.profile); got != tc.want {
 				t.Errorf("resolve(%q) = %q, want %q", tc.profile, got, tc.want)
 			}
+			if got := charts.lookup(tc.profile); got != tc.want {
+				t.Errorf("lookup(%q) = %q, want %q", tc.profile, got, tc.want)
+			}
 			if gotWarn := strings.Contains(buf.String(), "label="+tc.profile); gotWarn != tc.wantWarn {
 				t.Errorf("resolve(%q) logged WARN with the raw label = %v, want %v (logs: %q)", tc.profile, gotWarn, tc.wantWarn, buf.String())
 			}

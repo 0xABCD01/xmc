@@ -409,12 +409,13 @@ func (m *K8sHelmManager) recordChartSelection(ref ComponentRef, chartPath, profi
 
 // ProfileDrifted reports whether profile, once resolved, differs from the profile stored with the component's values.
 // Labels do not bump metadata.generation, so the reconciler checks it before skipping an already actuated component.
-// A component whose values were stored without a profile (before profiles existed) counts as DefaultProfile.
+// A component whose values were stored without a profile (before profiles existed) counts as DefaultProfile. It runs
+// on every reconcile pass, so an unknown label is not logged here; Ensure1PComponent logs it when it actuates.
 func (m *K8sHelmManager) ProfileDrifted(ctx context.Context, ref ComponentRef, profile string) bool {
 	if m == nil || validateComponentRef(ref) != nil {
 		return false
 	}
-	resolved := m.profileCharts.resolve(ctx, profile)
+	resolved := m.profileCharts.lookup(profile)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	stored, ok := m.persistedProfiles[componentKey(ref.Namespace, ref.Name)]

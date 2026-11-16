@@ -1036,8 +1036,13 @@ func TestK8sHelmManager_ProfileDrifted(t *testing.T) {
 					t.Fatalf("Ensure1PComponent failed: %v", err)
 				}
 			}
-			if got := mgr.ProfileDrifted(ctx, ref, tc.profile); got != tc.want {
+			var logs bytes.Buffer
+			driftCtx := logging.WithLogger(ctx, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+			if got := mgr.ProfileDrifted(driftCtx, ref, tc.profile); got != tc.want {
 				t.Errorf("ProfileDrifted(%q) = %v, want %v", tc.profile, got, tc.want)
+			}
+			if logs.Len() != 0 {
+				t.Errorf("ProfileDrifted(%q) logged %q, want no logs on the per-pass drift check", tc.profile, logs.String())
 			}
 		})
 	}
