@@ -103,7 +103,10 @@ def check_helm(ctx: gates.RunContext) -> None:
             ctx.warn_missing("helm not found. Helm chart linting skipped.")
     print("--> Running Helm Chart & Blueprint Unit Tests (test/helm)...")
     py_path = os.environ.get("PYTHONPATH")
-    env = {**os.environ, "PYTHONPATH": f"test/helm:{py_path}" if py_path else "test/helm"}
+    env = {
+        **os.environ,
+        "PYTHONPATH": f"test/helm{os.pathsep}{py_path}" if py_path else "test/helm",
+    }
     if (
         gates.exec_cmd(
             [

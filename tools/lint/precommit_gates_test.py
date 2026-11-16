@@ -133,8 +133,12 @@ class ToolResolutionTest(unittest.TestCase):
             tool = Path(tmpdir) / "mytool"
             tool.write_text("#!/bin/sh\n", encoding="utf-8")
             tool.chmod(0o755)
+            subdir = Path(tmpdir) / "adir"
+            subdir.mkdir()
+            subdir.chmod(0o755)
             with mock.patch.object(gates.shutil, "which", return_value=None):
                 self.assertEqual(gates.resolve_binary("mytool", [Path(tmpdir)]), str(tool))
+                self.assertIsNone(gates.resolve_binary("adir", [Path(tmpdir)]))
                 self.assertIsNone(gates.resolve_binary("missing", [Path(tmpdir)]))
 
         ctx = gates.RunContext(mode="check")

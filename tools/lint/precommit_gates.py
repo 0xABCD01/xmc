@@ -167,7 +167,7 @@ def walk_repo_files(
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames if d not in excluded_dirs)
             matched.extend(
-                os.path.join(dirpath, name).removeprefix("./")
+                Path(dirpath, name).as_posix()
                 for name in filenames
                 if (suffixes and name.endswith(suffixes)) or (exact_names and name in exact_names)
             )
@@ -203,7 +203,7 @@ def resolve_binary(name: str, extra_dirs: Sequence[Path] = ()) -> str | None:
     if found := shutil.which(name):
         return found
     for directory in extra_dirs:
-        if os.access(candidate := directory / name, os.X_OK):
+        if (candidate := directory / name).is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
 
@@ -213,7 +213,7 @@ def docker_prefix(
 ) -> list[str]:
     """Builds a `docker run --rm` command prefix mounting `cwd` at `mount`."""
     cmd = ["docker", "run", "--rm"]
-    if as_user:
+    if as_user and hasattr(os, "getuid") and hasattr(os, "getgid"):
         cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"])
     cmd.extend(["-v", f"{os.getcwd()}:{mount}", "-w", mount])
     if entrypoint is not None:
