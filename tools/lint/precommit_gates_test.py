@@ -57,6 +57,7 @@ class GitDiscoveryTest(unittest.TestCase):
             self.assertTrue(gates.staged_paths_match("AM", r"^\.agents/.*\.md$"))
             self.assertFalse(gates.staged_paths_match("D", r"^cmd/"))
         self.assertIn("--no-renames", run_mock.call_args.args[0])
+        self.assertEqual(run_mock.call_args.kwargs["cwd"], gates.REPO_ROOT)
 
 
 class PythonGateTest(unittest.TestCase):
@@ -97,6 +98,9 @@ class PythonGateTest(unittest.TestCase):
             gates.run_python_gate(ctx, gate)
         self.assertFalse(ctx.failed)
         self.assertEqual(exec_mock.call_count, 4)
+        self.assertTrue(
+            all(call.kwargs["cwd"] == gates.REPO_ROOT for call in exec_mock.call_args_list)
+        )
         self.assertIn("Lowered and staged", buf.getvalue())
 
     def test_records_failure_on_nonzero_script_exit(self):

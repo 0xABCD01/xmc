@@ -25,6 +25,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 @dataclass(frozen=True)
 class PythonGate:
@@ -118,7 +120,7 @@ def git_staged_paths(diff_filter: str, *, no_renames: bool = False) -> list[str]
     cmd = ["git", "-c", "core.quotePath=false", "diff", "--cached", "--name-only"]
     if no_renames:
         cmd.append("--no-renames")
-    res = exec_cmd([*cmd, f"--diff-filter={diff_filter}"], capture=True)
+    res = exec_cmd([*cmd, f"--diff-filter={diff_filter}"], cwd=REPO_ROOT, capture=True)
     if res.returncode != 0:
         print("❌ git diff --cached failed; cannot select pre-commit checks.", file=sys.stderr)
         raise SystemExit(1)
@@ -141,13 +143,16 @@ def run_python_gate(ctx: RunContext, gate: PythonGate) -> None:
     ):
         return
     print(gate.banner)
-    if exec_cmd([sys.executable, gate.script], quiet_out=True).returncode != 0:
+    if exec_cmd([sys.executable, gate.script], cwd=REPO_ROOT, quiet_out=True).returncode != 0:
         ctx.fail(gate.failure_msg)
         return
     if gate.baseline_path and ctx.mode == "fix":
-        exec_cmd([sys.executable, gate.script, "--update-baseline"], quiet_out=True)
-        if exec_cmd(["git", "diff", "--quiet", "--", gate.baseline_path]).returncode != 0:
-            exec_cmd(["git", "add", "--", gate.baseline_path])
+        exec_cmd([sys.executable, gate.script, "--update-baseline"], cwd=REPO_ROOT, quiet_out=True)
+        if (
+            exec_cmd(["git", "diff", "--quiet", "--", gate.baseline_path], cwd=REPO_ROOT).returncode
+            != 0
+        ):
+            exec_cmd(["git", "add", "--", gate.baseline_path], cwd=REPO_ROOT)
             print(f"--> Lowered and staged {gate.baseline_path}.")
 
 
