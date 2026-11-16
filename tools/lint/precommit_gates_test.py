@@ -1,0 +1,134 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for precommit_gates."""
+
+from __future__ import annotations
+
+import io
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+from unittest import mock
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tools.lint import precommit_gates as gates  # noqa: E402
+
+
+class RunContextTest(unittest.TestCase):
+    def test_fail_sets_failed_in_both_modes(self):
+        ctx = gates.RunContext(mode="fix")
+        with mock.patch("sys.stdout", new_callable=io.StringIO):
+            ctx.fail("broken")
+        self.assertTrue(ctx.failed)
+
+
+class GitDiscoveryTest(unittest.TestCase):
+    def test_git_staged_paths_exits_on_git_error(self):
+        err_proc = subprocess.CompletedProcess([], 128, stdout="", stderr="bad git")
+        with (
+            mock.patch.object(gates, "exec_cmd", return_value=err_proc),
+            mock.patch("sys.stderr", new_callable=io.StringIO),
+            self.assertRaises(SystemExit) as cm,
+        ):
+            gates.git_staged_paths("AM", no_renames=True)
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_staged_paths_match_uses_no_renames_and_regex(self):
+        ok_proc = subprocess.CompletedProcess(
+            [], 0, stdout="README.md\n.agents/foo.md\n", stderr=""
+        )
+        with mock.patch.object(gates, "exec_cmd", return_value=ok_proc) as run_mock:
+            self.assertTrue(gates.staged_paths_match("AM", r"^\.agents/.*\.md$"))
+            self.assertFalse(gates.staged_paths_match("D", r"^cmd/"))
+        self.assertIn("--no-renames", run_mock.call_args.args[0])
+
+
+class PythonGateTest(unittest.TestCase):
+    def test_skips_when_fix_mode_pattern_does_not_match(self):
+        ctx = gates.RunContext(mode="fix")
+        gate = gates.PythonGate(
+            banner="--> Docs",
+            script="tools/lint/check_agent_doc_paths.py",
+            failure_msg="fail",
+            staged_am_pattern=r"^\.agents/",
+            check_deletes=True,
+        )
+        with (
+            mock.patch.object(gates, "staged_paths_match", return_value=False),
+            mock.patch.object(gates, "exec_cmd") as exec_mock,
+        ):
+            gates.run_python_gate(ctx, gate)
+        exec_mock.assert_not_called()
+
+    def test_runs_and_updates_baseline_when_changed_in_fix_mode(self):
+        ctx = gates.RunContext(mode="fix")
+        gate = gates.PythonGate(
+            banner="--> Ratchet",
+            script="tools/lint/check_legacy_imports.py",
+            failure_msg="ratchet failed",
+            baseline_path="tools/lint/legacy_imports_baseline.json",
+        )
+        side_effects = [
+            subprocess.CompletedProcess([], 0, "", ""),  # check
+            subprocess.CompletedProcess([], 0, "", ""),  # --update-baseline
+            subprocess.CompletedProcess([], 1, "", ""),  # git diff --quiet (changed)
+            subprocess.CompletedProcess([], 0, "", ""),  # git add
+        ]
+        with (
+            mock.patch.object(gates, "exec_cmd", side_effect=side_effects) as exec_mock,
+            mock.patch("sys.stdout", new_callable=io.StringIO) as buf,
+        ):
+            gates.run_python_gate(ctx, gate)
+        self.assertFalse(ctx.failed)
+        self.assertEqual(exec_mock.call_count, 4)
+        self.assertIn("Lowered and staged", buf.getvalue())
+
+    def test_records_failure_on_nonzero_script_exit(self):
+        ctx = gates.RunContext(mode="check")
+        gate = gates.PythonGate(
+            banner="--> Naming",
+            script="tools/lint/check_file_naming.py",
+            failure_msg="naming failed",
+        )
+        with (
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
+            ),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            gates.run_python_gate(ctx, gate)
+        self.assertTrue(ctx.failed)
+
+    def test_main_runs_all_gates_and_propagates_failure(self):
+        with mock.patch.object(gates, "run_python_gate") as run_mock:
+            self.assertEqual(gates.main(["--mode", "check"]), 0)
+        self.assertEqual(run_mock.call_count, len(gates.PYTHON_GATES))
+
+        def _fail_first(ctx: gates.RunContext, _gate: gates.PythonGate) -> None:
+            ctx.fail("bad")
+
+        with (
+            mock.patch.object(gates, "run_python_gate", side_effect=_fail_first),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertEqual(gates.main(["--mode", "fix"]), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

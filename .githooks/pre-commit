@@ -135,71 +135,11 @@ check_go() {
   fi
 }
 
-check_legacy_imports() {
-  echo "--> Running google3 Legacy Import Ratchet..."
-  local baseline="tools/lint/legacy_imports_baseline.json"
-  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_legacy_imports.py >/dev/null; then
-    echo "❌ google3 legacy import ratchet failed (see JSON error above)."
-    FAILED=1
-    return
-  fi
-  if [ "$MODE" = "fix" ]; then
-    # Lower the baseline when counts dropped (the tool never raises counts) and
-    # stage it so the reduction is recorded in this commit.
-    XMC_BYPASS_VENV=1 python3 tools/lint/check_legacy_imports.py --update-baseline >/dev/null
-    if ! git diff --quiet -- "${baseline}"; then
-      git add -- "${baseline}"
-      echo "--> Lowered and staged ${baseline}."
-    fi
-  fi
-}
-
-check_examples_coverage() {
-  echo "--> Checking Nightly E2E Verification Coverage for examples/..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/nightly_tests/check_examples_coverage.py >/dev/null; then
-    echo "❌ Nightly examples verification coverage check failed."
+check_python_gates() {
+  if ! XMC_BYPASS_VENV=1 python3 tools/lint/precommit_gates.py --mode "${MODE}"; then
     FAILED=1
   fi
 }
-
-check_matrix_contract() {
-  echo "--> Checking Nightly Matrix Launch Args vs Verifier Expectations..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/nightly_tests/check_matrix_contract.py >/dev/null; then
-    echo "❌ Nightly matrix contract check failed (see JSON error above)."
-    FAILED=1
-  fi
-}
-
-check_agent_doc_paths() {
-  # In fix mode, only run when agent docs are staged, or when staged deletes or
-  # renames could orphan a path an agent doc references, to keep the hook fast.
-  if [ "${MODE}" = "fix" ] && ! staged_paths_match AM '^\.agents/.*\.md$|(^|/)AGENTS\.md$' && ! staged_paths_match D '.'; then
-    return
-  fi
-  echo "--> Checking Agent Doc Path References..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_agent_doc_paths.py >/dev/null; then
-    echo "❌ Agent docs reference non-existent repository paths (see JSON error above)."
-    FAILED=1
-  fi
-}
-
-check_file_naming() {
-  echo "--> Checking UI & Workflow File Naming Conventions..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_file_naming.py >/dev/null; then
-    echo "❌ UI or workflow file naming check failed (see JSON error above)."
-    FAILED=1
-  fi
-}
-
-check_ui_selector_contract() {
-  # Runs unconditionally (~0.2s): sources are discovered by content, so no path gate.
-  echo "--> Checking Nightly UI Selector Contract..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_ui_selector_contract.py >/dev/null; then
-    echo "❌ Nightly UI selectors reference missing DOM or unannotated copy (see JSON error above)."
-    FAILED=1
-  fi
-}
-
 
 check_ui() {
   local ui_files
@@ -583,12 +523,7 @@ main() {
   snapshot_staging
   check_bazel
   check_go
-  check_legacy_imports
-  check_examples_coverage
-  check_matrix_contract
-  check_agent_doc_paths
-  check_file_naming
-  check_ui_selector_contract
+  check_python_gates
   check_ui
   check_license
   check_python

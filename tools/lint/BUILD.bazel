@@ -105,3 +105,18 @@ py_test(
         "//tools/common:tool_utils",
     ],
 )
+
+py_library(
+    name = "precommit_gates_lib",
+    srcs = ["precommit_gates.py"],
+    imports = ["../.."],
+)
+
+py_test(
+    name = "precommit_gates_test",
+    srcs = ["precommit_gates_test.py"],
+    imports = ["../.."],
+    deps = [
+        ":precommit_gates_lib",
+    ],
+)
