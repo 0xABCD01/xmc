@@ -732,9 +732,12 @@ def _enabled_retired_components(
     raw_comps = stored_values.get("components") if stored_values else None
     comps: Mapping[str, Any] = raw_comps if isinstance(raw_comps, Mapping) else {}
     for name, value in comps.items():
-        if name not in catalog_names and isinstance(value, Mapping):
-            if parse_bool_flag(value.get("enabled", False)):
-                names.add(name)
+        if (
+            name not in catalog_names
+            and isinstance(value, Mapping)
+            and parse_bool_flag(value.get("enabled", False))
+        ):
+            names.add(name)
     return sorted(names)
 
 
