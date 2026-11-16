@@ -89,6 +89,17 @@ class GitDiscoveryTest(unittest.TestCase):
         self.assertEqual(run_mock.call_args.kwargs["cwd"], gates.REPO_ROOT)
         self.assertEqual(run_mock.call_args.kwargs["errors"], "surrogateescape")
 
+    def test_git_ls_files_dedupes_and_handles_failure(self):
+        ok_proc = subprocess.CompletedProcess([], 0, stdout="b.sh\na.sh\nb.sh\n\n", stderr="")
+        with mock.patch.object(gates, "exec_cmd", return_value=ok_proc) as run_mock:
+            files = gates.git_ls_files(["*.sh"], include_untracked=True)
+        self.assertEqual(files, ["a.sh", "b.sh"])
+        self.assertIn("--exclude-standard", run_mock.call_args.args[0])
+
+        fail_proc = subprocess.CompletedProcess([], 1, stdout="", stderr="")
+        with mock.patch.object(gates, "exec_cmd", return_value=fail_proc):
+            self.assertEqual(gates.git_ls_files(["*.sh"]), [])
+
     def test_walk_repo_files_collect_target_files_and_should_run_scope(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

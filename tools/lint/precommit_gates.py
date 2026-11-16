@@ -160,6 +160,17 @@ def staged_paths_match(diff_filter: str, pattern: str) -> bool:
     return any(regex.search(path) for path in git_staged_paths(diff_filter, no_renames=True))
 
 
+def git_ls_files(pathspecs: Sequence[str], *, include_untracked: bool = False) -> list[str]:
+    """Lists sorted unique paths returned by `git ls-files` for `pathspecs`."""
+    cmd = ["git", "-c", "core.quotePath=false", "ls-files"]
+    if include_untracked:
+        cmd.extend(["--cached", "--others", "--exclude-standard"])
+    res = exec_cmd([*cmd, "--", *pathspecs], capture=True, quiet_err=True)
+    if res.returncode != 0:
+        return []
+    return sorted({line for line in res.stdout.splitlines() if line})
+
+
 def walk_repo_files(
     roots: Sequence[str],
     *,

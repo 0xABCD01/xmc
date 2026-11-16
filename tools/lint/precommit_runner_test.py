@@ -256,6 +256,34 @@ class LanguageChecksTest(unittest.TestCase):
             runner.check_mypy(ctx_check)
         self.assertTrue(ctx_check.failed)
 
+    def test_check_workflows_and_shell(self):
+        ctx_wf = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "git_ls_files", return_value=[".github/workflows/lint.yml"]),
+            mock.patch.object(gates, "resolve_go_tool", return_value="/bin/actionlint"),
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
+            ),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_workflows(ctx_wf)
+        self.assertTrue(ctx_wf.failed)
+
+        ctx_sh = gates.RunContext(mode="fix")
+        with (
+            mock.patch.object(gates, "git_staged_paths", return_value=["a.sh", "b.py"]),
+            mock.patch.object(gates, "resolve_binary", return_value="/bin/shellcheck"),
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+            ) as exec_mock,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_shell(ctx_sh)
+        self.assertFalse(ctx_sh.failed)
+        self.assertEqual(
+            exec_mock.call_args.args[0], ["/bin/shellcheck", "-S", "style", "-e", "SC1091", "a.sh"]
+        )
+
 
 class OrchestrationAndMainTest(unittest.TestCase):
     @contextlib.contextmanager
@@ -272,6 +300,8 @@ class OrchestrationAndMainTest(unittest.TestCase):
                 (runner, "check_license"),
                 (runner, "check_python"),
                 (runner, "check_mypy"),
+                (runner, "check_workflows"),
+                (runner, "check_shell"),
                 (deploy_checks, "check_deploy"),
             ):
                 stack.enter_context(mock.patch.object(target, attr))

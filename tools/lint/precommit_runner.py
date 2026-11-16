@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -232,6 +233,43 @@ def check_mypy(ctx: gates.RunContext) -> None:
         ctx.fail("Mypy type check failed.")
 
 
+def check_workflows(ctx: gates.RunContext) -> None:
+    """Runs `actionlint` across `.github/workflows`."""
+    if ctx.mode == "check" and not gates.git_ls_files(
+        [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    ):
+        return
+    if ctx.mode == "fix" and not gates.staged_paths_match(
+        "AMD", r"^\.github/(workflows/|actions/)"
+    ):
+        return
+    actionlint = gates.resolve_go_tool(
+        ctx, "actionlint", "actionlint not found. Workflow linting skipped."
+    )
+    if not actionlint:
+        return
+    print("--> Running GitHub Actions Workflow Linter (actionlint)...")
+    if gates.exec_cmd([actionlint]).returncode != 0:
+        ctx.fail("actionlint failed.")
+
+
+def check_shell(ctx: gates.RunContext) -> None:
+    """Runs `shellcheck` across tracked or staged shell scripts."""
+    if ctx.mode == "check":
+        files = gates.git_ls_files(["*.sh", "*.bash"])
+    else:
+        files = [p for p in gates.git_staged_paths("ACMR") if re.search(r"\.(sh|bash)$", p)]
+    if not files:
+        return
+    shellcheck = gates.resolve_binary("shellcheck", (Path.home() / ".local/bin",))
+    if not shellcheck:
+        ctx.warn_missing("shellcheck not found. Shell script linting skipped.")
+        return
+    print("--> Running Shell Script Linter (shellcheck)...")
+    if gates.exec_cmd([shellcheck, "-S", "style", "-e", "SC1091", *files]).returncode != 0:
+        ctx.fail("shellcheck failed.")
+
+
 def _autostage(subcommand: str, state_path: str) -> bool:
     cmd = [sys.executable, "tools/lint/precommit_autostage.py", subcommand, "--state", state_path]
     return gates.exec_cmd(cmd, quiet_out=True).returncode == 0
@@ -249,7 +287,15 @@ def _run_linter_phase(mode: str) -> bool:
             fn(ctx)
         for gate in gates.PYTHON_GATES:
             gates.run_python_gate(ctx, gate)
-        for fn in (check_ui, check_license, check_python, check_mypy, deploy_checks.check_deploy):
+        for fn in (
+            check_ui,
+            check_license,
+            check_python,
+            check_mypy,
+            deploy_checks.check_deploy,
+            check_workflows,
+            check_shell,
+        ):
             fn(ctx)
         if mode == "fix":
             if state_path is not None and not _autostage("restage", state_path):
