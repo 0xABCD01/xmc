@@ -159,17 +159,19 @@ describe('scatter_options_builder', () => {
       expect(seriesArr[2].lineStyle?.color).toBe(XMC_BASELINE_COLOR);
 
       // Verify markLine baseline
-      const markLineData = seriesArr[3].markLine?.data as Array<{ yAxis: number }>;
-      expect(markLineData[0].yAxis).toBe(0.7);
+      const markLineData = seriesArr[3].markLine?.data as Array<{ yAxis: number }> | undefined;
+      expect(markLineData?.[0]?.yAxis).toBe(0.7);
     });
 
     it('should extract valid HLINE series via extractHlineSeries helper', () => {
       const hlines = extractHlineSeries(mockSpec.geoms);
       expect(hlines.length).toBe(1);
-      const markLineData = (hlines[0] as LineSeriesOption).markLine?.data as Array<{
-        yAxis: number;
-      }>;
-      expect(markLineData[0].yAxis).toBe(0.7);
+      const markLineData = (hlines[0] as LineSeriesOption).markLine?.data as
+        | Array<{
+            yAxis: number;
+          }>
+        | undefined;
+      expect(markLineData?.[0]?.yAxis).toBe(0.7);
     });
 
     it('should ignore geoms with null or undefined yintercept', () => {
