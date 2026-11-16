@@ -70,6 +70,40 @@ class LanguageChecksTest(unittest.TestCase):
             runner.check_go(ctx)
         self.assertTrue(ctx.failed)
 
+    def test_check_go_skips_determinism_without_go_and_chunks_gofmt(self):
+        ctx_nogo = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(runner.shutil, "which", return_value=None),
+            mock.patch.object(gates, "resolve_go_tool", return_value=None),
+            mock.patch.object(runner.os.path, "isdir", return_value=True),
+            mock.patch.object(gates, "exec_cmd") as exec_mock,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_go(ctx_nogo)
+        self.assertFalse(ctx_nogo.failed)
+        exec_mock.assert_not_called()
+
+        ctx_fix = gates.RunContext(mode="fix")
+        many_go = [f"pkg/f{i}.go" for i in range(501)]
+        with (
+            mock.patch.object(
+                runner.shutil,
+                "which",
+                side_effect=lambda name: "/usr/bin/gofmt" if name == "gofmt" else None,
+            ),
+            mock.patch.object(gates, "resolve_go_tool", return_value=None),
+            mock.patch.object(gates, "walk_repo_files", return_value=many_go),
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+            ) as exec_fix,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_go(ctx_fix)
+        # 1 gofmt -l + 2 gofmt -w chunks (500 + 1)
+        self.assertEqual(exec_fix.call_count, 3)
+        self.assertEqual(len(exec_fix.call_args_list[1].args[0]), 503)
+        self.assertEqual(len(exec_fix.call_args_list[2].args[0]), 4)
+
     def test_check_ui_and_license(self):
         ctx = gates.RunContext(mode="fix")
         with (

@@ -90,7 +90,8 @@ def check_go(ctx: gates.RunContext) -> None:
                 ["."], suffixes=(".go",), excluded_dirs=frozenset({"vendor", ".git"})
             )
         ):
-            gates.exec_cmd(["gofmt", "-s", "-w", *go_files])
+            for idx in range(0, len(go_files), 500):
+                gates.exec_cmd(["gofmt", "-s", "-w", *go_files[idx : idx + 500]])
     if linter := gates.resolve_go_tool(
         ctx,
         "golangci-lint",
@@ -106,21 +107,20 @@ def check_go(ctx: gates.RunContext) -> None:
         gates.run_mode_command(
             ctx, [linter], check_args=["run"], fix_args=["run", "--fix"], failure_msg=msg
         )
+    if not shutil.which("go"):
+        return
     if os.path.isdir("tools/lint/check_go_determinism"):
         print("--> Running Go Test Determinism & State Leakage Checker...")
         if gates.exec_cmd(["go", "run", "./tools/lint/check_go_determinism"]).returncode != 0:
             ctx.failed = True
-    if shutil.which("go"):
-        print("--> Checking Go Module Dependencies (go mod tidy)...")
-        if ctx.mode != "check":
-            gates.exec_cmd(["go", "mod", "tidy"])
-        elif (
-            gates.exec_cmd(
-                ["go", "mod", "tidy", "-diff"], quiet_out=True, quiet_err=True
-            ).returncode
-            != 0
-        ):
-            ctx.fail("Unused or missing Go module dependencies found. Run 'go mod tidy' to sync.")
+    print("--> Checking Go Module Dependencies (go mod tidy)...")
+    if ctx.mode != "check":
+        gates.exec_cmd(["go", "mod", "tidy"])
+    elif (
+        gates.exec_cmd(["go", "mod", "tidy", "-diff"], quiet_out=True, quiet_err=True).returncode
+        != 0
+    ):
+        ctx.fail("Unused or missing Go module dependencies found. Run 'go mod tidy' to sync.")
 
 
 def check_ui(ctx: gates.RunContext) -> None:
