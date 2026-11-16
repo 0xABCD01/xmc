@@ -25,7 +25,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 COMMON_EXCLUDES = frozenset({".git", "node_modules", ".angular", "venv", ".venv", "ctk-out"})
@@ -111,11 +111,13 @@ def exec_cmd(
     capture: bool = False,
     quiet_out: bool = False,
     quiet_err: bool = False,
+    errors: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Executes `cmd` cleanly, returning returncode `127` on `OSError`."""
     out = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet_out else None)
     err = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet_err else None)
     cmd_list = list(cmd)
+    text_errors = errors if errors is not None else ("surrogateescape" if capture else None)
     try:
         return subprocess.run(
             cmd_list,
@@ -124,6 +126,7 @@ def exec_cmd(
             stdout=out,
             stderr=err,
             text=True,
+            errors=text_errors,
             check=False,
         )
     except OSError as exc:
@@ -134,16 +137,21 @@ def exec_cmd(
 
 def git_staged_paths(diff_filter: str, *, no_renames: bool = False) -> list[str]:
     """Lists staged paths matching `diff_filter`, exiting 1 if git fails."""
-    cmd = ["git", "-c", "core.quotePath=false", "diff", "--cached", "--name-only"]
+    cmd = ["git", "diff", "--cached", "--name-only", "-z"]
     if no_renames:
         cmd.append("--no-renames")
-    res = exec_cmd([*cmd, f"--diff-filter={diff_filter}"], cwd=REPO_ROOT, capture=True)
+    res = exec_cmd(
+        [*cmd, f"--diff-filter={diff_filter}"],
+        cwd=REPO_ROOT,
+        capture=True,
+        errors="surrogateescape",
+    )
     if res.returncode != 0:
         print("❌ git diff --cached failed; cannot select pre-commit checks.", file=sys.stderr)
         if res.stderr:
             print(res.stderr.strip(), file=sys.stderr)
         raise SystemExit(1)
-    return [line for line in res.stdout.splitlines() if line]
+    return [path for path in res.stdout.split("\0") if path]
 
 
 def staged_paths_match(diff_filter: str, pattern: str) -> bool:
@@ -155,22 +163,23 @@ def staged_paths_match(diff_filter: str, pattern: str) -> bool:
 def walk_repo_files(
     roots: Sequence[str],
     *,
-    suffixes: tuple[str, ...] = (),
+    suffixes: Sequence[str] = (),
     excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
     base_dir: Path = REPO_ROOT,
 ) -> list[str]:
-    """Walks `roots` relative to `base_dir` and returns sorted matching paths."""
-    matched: list[str] = []
+    """Walks `roots` relative to `base_dir` and returns sorted unique matching paths."""
+    matched: set[str] = set()
+    suffix_tuple = tuple(suffixes)
     for root in roots:
         root_path = base_dir if root == "." else base_dir / root
         if not root_path.exists():
             continue
         for dirpath, dirnames, filenames in os.walk(root_path):
             dirnames[:] = sorted(d for d in dirnames if d not in excluded_dirs)
-            matched.extend(
+            matched.update(
                 Path(dirpath, name).relative_to(base_dir).as_posix()
                 for name in filenames
-                if suffixes and name.endswith(suffixes)
+                if not suffix_tuple or name.endswith(suffix_tuple)
             )
     return sorted(matched)
 
@@ -180,7 +189,7 @@ def collect_target_files(
     *,
     staged_regex: str,
     roots: Sequence[str] = (".",),
-    suffixes: tuple[str, ...] = (),
+    suffixes: Sequence[str] = (),
     excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
     base_dir: Path = REPO_ROOT,
 ) -> list[str]:
@@ -189,15 +198,27 @@ def collect_target_files(
         return walk_repo_files(
             roots, suffixes=suffixes, excluded_dirs=excluded_dirs, base_dir=base_dir
         )
+    if not roots:
+        return []
+    staged = git_staged_paths("ACM", no_renames=True)
+    normalized_roots = tuple(
+        PurePosixPath(r.replace(os.sep, "/")).as_posix().rstrip("/") if r else "" for r in roots
+    )
+    if "." not in normalized_roots:
+        staged = [
+            path
+            for path in staged
+            if any(path == root or path.startswith(f"{root}/") for root in normalized_roots if root)
+        ]
     regex = re.compile(staged_regex)
-    return [path for path in git_staged_paths("ACM") if regex.search(path)]
+    return [path for path in staged if regex.search(path)]
 
 
 def should_run_scope(
     mode: str,
     *,
     roots: Sequence[str],
-    suffixes: tuple[str, ...],
+    suffixes: Sequence[str],
     fix_pattern: str,
     base_dir: Path = REPO_ROOT,
 ) -> bool:

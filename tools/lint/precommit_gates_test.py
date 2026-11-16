@@ -34,10 +34,11 @@ from tools.lint import precommit_gates as gates  # noqa: E402
 
 class RunContextTest(unittest.TestCase):
     def test_fail_sets_failed_in_both_modes(self):
-        ctx = gates.RunContext(mode="fix")
-        with mock.patch("sys.stdout", new_callable=io.StringIO):
-            ctx.fail("broken")
-        self.assertTrue(ctx.failed)
+        for mode in ("fix", "check"):
+            ctx = gates.RunContext(mode=mode)
+            with mock.patch("sys.stdout", new_callable=io.StringIO):
+                ctx.fail("broken")
+            self.assertTrue(ctx.failed)
 
     def test_exec_cmd_handles_real_subprocess_and_missing_binary(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -78,13 +79,15 @@ class GitDiscoveryTest(unittest.TestCase):
 
     def test_staged_paths_match_uses_no_renames_and_regex(self):
         ok_proc = subprocess.CompletedProcess(
-            [], 0, stdout="README.md\n.agents/foo.md\n", stderr=""
+            [], 0, stdout="README.md\0.agents/foo\udce9.md\0", stderr=""
         )
         with mock.patch.object(gates, "exec_cmd", return_value=ok_proc) as run_mock:
             self.assertTrue(gates.staged_paths_match("AM", r"^\.agents/.*\.md$"))
             self.assertFalse(gates.staged_paths_match("D", r"^cmd/"))
+        self.assertIn("-z", run_mock.call_args.args[0])
         self.assertIn("--no-renames", run_mock.call_args.args[0])
         self.assertEqual(run_mock.call_args.kwargs["cwd"], gates.REPO_ROOT)
+        self.assertEqual(run_mock.call_args.kwargs["errors"], "surrogateescape")
 
     def test_walk_repo_files_collect_target_files_and_should_run_scope(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -94,12 +97,18 @@ class GitDiscoveryTest(unittest.TestCase):
             (root / "sub" / "vars.tf").write_text("", encoding="utf-8")
             (root / "node_modules").mkdir()
             (root / "node_modules" / "skip.tf").write_text("", encoding="utf-8")
-            found = gates.walk_repo_files([".", "missing"], suffixes=(".tf",), base_dir=root)
+            found = gates.walk_repo_files([".", ".", "missing"], suffixes=[".tf"], base_dir=root)
+            found_all = gates.walk_repo_files([".", "missing"], base_dir=root)
         self.assertEqual(found, ["main.tf", "sub/vars.tf"])
+        self.assertEqual(found_all, ["main.tf", "sub/vars.tf"])
 
         with (
             mock.patch.object(gates, "walk_repo_files", return_value=["deploy/a.tf"]),
-            mock.patch.object(gates, "git_staged_paths", return_value=["deploy/a.tf", "b.py"]),
+            mock.patch.object(
+                gates,
+                "git_staged_paths",
+                return_value=["deploy/a.tf", "deploy/sub/b.tf", "deploy_other/c.tf", "b.py"],
+            ) as staged_mock,
             mock.patch.object(gates, "staged_paths_match", return_value=False),
         ):
             self.assertEqual(
@@ -108,7 +117,26 @@ class GitDiscoveryTest(unittest.TestCase):
             )
             self.assertEqual(
                 gates.collect_target_files("fix", staged_regex=r"\.tf$", suffixes=(".tf",)),
-                ["deploy/a.tf"],
+                ["deploy/a.tf", "deploy/sub/b.tf", "deploy_other/c.tf"],
+            )
+            self.assertEqual(
+                gates.collect_target_files(
+                    "fix", roots=("./deploy/",), staged_regex=r"\.tf$", suffixes=(".tf",)
+                ),
+                ["deploy/a.tf", "deploy/sub/b.tf"],
+            )
+            self.assertTrue(staged_mock.call_args.kwargs["no_renames"])
+            self.assertEqual(
+                gates.collect_target_files(
+                    "fix", roots=("",), staged_regex=r"\.tf$", suffixes=(".tf",)
+                ),
+                [],
+            )
+            self.assertEqual(
+                gates.collect_target_files(
+                    "fix", roots=(), staged_regex=r"\.tf$", suffixes=(".tf",)
+                ),
+                [],
             )
             self.assertTrue(
                 gates.should_run_scope(
@@ -165,11 +193,25 @@ class ToolResolutionTest(unittest.TestCase):
         self.assertTrue(ctx.failed)
 
     def test_run_mode_command_respects_ignore_fix_error(self):
+        ctx_fix_ok = gates.RunContext(mode="fix")
         ctx_fix = gates.RunContext(mode="fix")
         ctx_check = gates.RunContext(mode="check")
         with mock.patch.object(
+            gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+        ) as ok_exec:
+            gates.run_mode_command(
+                ctx_fix_ok,
+                ["tf"],
+                check_args=["fmt", "-check"],
+                fix_args=["fmt"],
+                failure_msg="bad",
+            )
+        self.assertFalse(ctx_fix_ok.failed)
+        self.assertEqual(ok_exec.call_args.args[0], ["tf", "fmt"])
+
+        with mock.patch.object(
             gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
-        ):
+        ) as fail_exec:
             gates.run_mode_command(
                 ctx_fix,
                 ["tf"],
@@ -189,6 +231,7 @@ class ToolResolutionTest(unittest.TestCase):
                     ignore_fix_error=True,
                 )
             self.assertTrue(ctx_check.failed)
+            self.assertEqual(fail_exec.call_args.args[0], ["tf", "fmt", "-check"])
 
 
 class PythonGateTest(unittest.TestCase):
@@ -278,15 +321,6 @@ class PythonGateTest(unittest.TestCase):
                 gates.run_python_gate(ctx_err, gate)
             self.assertTrue(ctx_err.failed)
 
-    def test_main_sets_bypass_venv_and_runs_all_gates(self):
-        with (
-            mock.patch.dict(os.environ, {}, clear=True),
-            mock.patch.object(gates, "run_python_gate") as run_mock,
-        ):
-            self.assertEqual(gates.main(["--mode", "check"]), 0)
-            self.assertEqual(os.environ.get("XMC_BYPASS_VENV"), "1")
-        self.assertEqual(run_mock.call_count, len(gates.PYTHON_GATES))
-
     def test_runs_and_updates_baseline_when_changed_in_fix_mode(self):
         ctx = gates.RunContext(mode="fix")
         gate = gates.PythonGate(
@@ -329,9 +363,13 @@ class PythonGateTest(unittest.TestCase):
             gates.run_python_gate(ctx, gate)
         self.assertTrue(ctx.failed)
 
-    def test_main_runs_all_gates_and_propagates_failure(self):
-        with mock.patch.object(gates, "run_python_gate") as run_mock:
+    def test_main_sets_bypass_venv_runs_gates_and_propagates_failure(self):
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(gates, "run_python_gate") as run_mock,
+        ):
             self.assertEqual(gates.main(["--mode", "check"]), 0)
+            self.assertEqual(os.environ.get("XMC_BYPASS_VENV"), "1")
         self.assertEqual(run_mock.call_count, len(gates.PYTHON_GATES))
 
         def _fail_first(ctx: gates.RunContext, _gate: gates.PythonGate) -> None:

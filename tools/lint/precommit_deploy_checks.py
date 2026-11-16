@@ -78,12 +78,43 @@ def check_tflint(ctx: gates.RunContext) -> None:
     print("--> Running Terraform Linter (TFLint)...")
     base, is_docker = resolved
     if is_docker:
-        cmd = [*base, "-c", "tflint --init >/dev/null 2>&1 && tflint --recursive"]
+        cmd = [*base, "-c", "tflint --init >/dev/null && tflint --recursive"]
     else:
         gates.exec_cmd([*base, "--init"], cwd=gates.REPO_ROOT, quiet_out=True, quiet_err=True)
         cmd = [*base, "--recursive"]
     if gates.exec_cmd(cmd, cwd=gates.REPO_ROOT).returncode != 0:
         ctx.fail("TFLint check failed.")
+
+
+def _run_helm_lint(ctx: gates.RunContext) -> None:
+    if helm_bin := shutil.which("helm"):
+        print("--> Running Helm Chart Linter (helm lint)...")
+        if gates.exec_cmd([helm_bin, "lint", "deploy/helm"], cwd=gates.REPO_ROOT).returncode != 0:
+            ctx.fail("Helm lint failed.")
+    else:
+        ctx.warn_missing("helm not found. Helm chart linting skipped.")
+
+
+def _run_helm_unit_tests(ctx: gates.RunContext) -> None:
+    print("--> Running Helm Chart & Blueprint Unit Tests (test/helm)...")
+    test_helm_dir = str(gates.REPO_ROOT / "test" / "helm")
+    py_path = os.environ.get("PYTHONPATH")
+    env = {
+        **os.environ,
+        "PYTHONPATH": f"{test_helm_dir}{os.pathsep}{py_path}" if py_path else test_helm_dir,
+    }
+    cmd = [
+        sys.executable,
+        "-m",
+        "unittest",
+        "discover",
+        "--start-directory",
+        test_helm_dir,
+        "--pattern",
+        "*_test.py",
+    ]
+    if gates.exec_cmd(cmd, cwd=gates.REPO_ROOT, env=env).returncode != 0:
+        ctx.fail("Helm chart & blueprint unit tests failed.")
 
 
 def check_helm(ctx: gates.RunContext) -> None:
@@ -96,36 +127,8 @@ def check_helm(ctx: gates.RunContext) -> None:
     ):
         return
     if ctx.mode == "check" or gates.staged_paths_match("AMD", r"^deploy/helm/"):
-        if shutil.which("helm"):
-            print("--> Running Helm Chart Linter (helm lint)...")
-            if gates.exec_cmd(["helm", "lint", "deploy/helm"], cwd=gates.REPO_ROOT).returncode != 0:
-                ctx.fail("Helm lint failed.")
-        else:
-            ctx.warn_missing("helm not found. Helm chart linting skipped.")
-    print("--> Running Helm Chart & Blueprint Unit Tests (test/helm)...")
-    py_path = os.environ.get("PYTHONPATH")
-    env = {
-        **os.environ,
-        "PYTHONPATH": f"test/helm{os.pathsep}{py_path}" if py_path else "test/helm",
-    }
-    if (
-        gates.exec_cmd(
-            [
-                sys.executable,
-                "-m",
-                "unittest",
-                "discover",
-                "--start-directory",
-                "test/helm",
-                "--pattern",
-                "*_test.py",
-            ],
-            cwd=gates.REPO_ROOT,
-            env=env,
-        ).returncode
-        != 0
-    ):
-        ctx.fail("Helm chart & blueprint unit tests failed.")
+        _run_helm_lint(ctx)
+    _run_helm_unit_tests(ctx)
 
 
 def check_security(ctx: gates.RunContext) -> None:
@@ -147,6 +150,7 @@ def check_security(ctx: gates.RunContext) -> None:
     if not resolved:
         return
     print("--> Running Infrastructure & Workload Security Scanner (Trivy)...")
+    # TODO: Add "--exit-code", "1" once deploy/ manifests are verified clean under it.
     cmd = [*resolved[0], "config", "--skip-check-update", "--severity", "HIGH,CRITICAL", "deploy/"]
     if gates.exec_cmd(cmd, cwd=gates.REPO_ROOT).returncode != 0:
         ctx.fail("Trivy security check failed.")
