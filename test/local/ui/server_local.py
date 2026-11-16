@@ -24,6 +24,7 @@ and unified as those parallel efforts converge.
 """
 
 import argparse
+import contextlib
 import glob
 import http.server
 import json
@@ -31,7 +32,7 @@ import logging
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -92,12 +93,16 @@ def find_testdata_dirs() -> list[str]:
             ]
             for c in candidates:
                 norm = os.path.normpath(c)
-                if norm not in seen and os.path.isdir(norm):
-                    if glob.glob(os.path.join(norm, "*.json")) or glob.glob(
-                        os.path.join(norm, "*.golden.json")
-                    ):
-                        seen.add(norm)
-                        found.append(norm)
+                if (
+                    norm not in seen
+                    and os.path.isdir(norm)
+                    and (
+                        glob.glob(os.path.join(norm, "*.json"))
+                        or glob.glob(os.path.join(norm, "*.golden.json"))
+                    )
+                ):
+                    seen.add(norm)
+                    found.append(norm)
     return found
 
 
@@ -140,8 +145,8 @@ def load_golden_files() -> dict[str, Any]:
 class SPAHandler(server.SPAHandler):  # type: ignore[misc, unused-ignore]
     """Custom request handler supporting SPA routing, config.js, and mock APIs."""
 
-    goldens: dict[str, Any] = {}
-    in_memory_dashboards: list[dict[str, Any]] = []
+    goldens: ClassVar[dict[str, Any]] = {}
+    in_memory_dashboards: ClassVar[list[dict[str, Any]]] = []
 
     @classmethod
     def initialize_mock_data(cls) -> None:
@@ -187,6 +192,17 @@ class SPAHandler(server.SPAHandler):  # type: ignore[misc, unused-ignore]
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
+    def _handle_dashboards_get(self, clean_path: str) -> None:
+        if clean_path in ("/v1/dashboards", "/dashboards"):
+            self.send_json(200, {"dashboards": SPAHandler.in_memory_dashboards})
+            return
+        dashboard_name = clean_path.lstrip("/").removeprefix("v1/")
+        for dash in SPAHandler.in_memory_dashboards:
+            if dash.get("name") == dashboard_name:
+                self.send_json(200, dash)
+                return
+        self.send_json(404, {"error": f"Dashboard {dashboard_name} not found"})
+
     def do_GET(self) -> None:
         """Handles GET requests for SPA routing, static files, and mock APIs."""
         if self.path == "/healthz":
@@ -196,40 +212,25 @@ class SPAHandler(server.SPAHandler):  # type: ignore[misc, unused-ignore]
             self.end_headers()
             self.wfile.write(b"OK")
             return
-
         if self.path == "/config.js":
             self._handle_config_js()
             return
-
-        if self.path.startswith("/v1/auth/user") or self.path.startswith("/auth/user"):
+        if self.path.startswith(("/v1/auth/user", "/auth/user")):
             self._handle_auth_user()
             return
-
         if ":getData" in self.path:
             self._handle_chart_data(self.path)
             return
-
-        if self.path.startswith("/v1/dashboards") or self.path.startswith("/dashboards"):
-            clean_path = self.path.split("?")[0].rstrip("/")
-            if clean_path in ("/v1/dashboards", "/dashboards"):
-                self.send_json(200, {"dashboards": SPAHandler.in_memory_dashboards})
-                return
-            dashboard_name = clean_path.lstrip("/").removeprefix("v1/")
-            for dash in SPAHandler.in_memory_dashboards:
-                if dash.get("name") == dashboard_name:
-                    self.send_json(200, dash)
-                    return
-            self.send_json(404, {"error": f"Dashboard {dashboard_name} not found"})
+        if self.path.startswith(("/v1/dashboards", "/dashboards")):
+            self._handle_dashboards_get(self.path.split("?")[0].rstrip("/"))
             return
-
-        if self.path.startswith("/v1/experiments") or self.path.startswith("/experiments"):
+        if self.path.startswith(("/v1/experiments", "/experiments")):
             clean_path = self.path.split("?")[0].rstrip("/")
             if clean_path in ("/v1/experiments", "/experiments"):
                 self._handle_experiments_list()
-                return
-            self._handle_single_experiment(clean_path)
+            else:
+                self._handle_single_experiment(clean_path)
             return
-
         super().do_GET()
 
     def do_HEAD(self) -> None:
@@ -347,11 +348,7 @@ class SPAHandler(server.SPAHandler):  # type: ignore[misc, unused-ignore]
         self.send_json(200, fallback)
 
     @classmethod
-    def get_experiments(cls) -> list[dict[str, Any]]:
-        """Dynamically extracts distinct experiments from loaded test datasets."""
-        experiments: dict[int, dict[str, Any]] = {}
-
-        # 1. Extract from loaded dashboards
+    def _collect_dashboard_experiments(cls, experiments: dict[int, dict[str, Any]]) -> None:
         for dash in cls.in_memory_dashboards:
             for chart in dash.get("charts", []):
                 xid = chart.get("xid")
@@ -362,31 +359,26 @@ class SPAHandler(server.SPAHandler):  # type: ignore[misc, unused-ignore]
                 except (ValueError, TypeError):
                     continue
                 if xid_int not in experiments:
-                    title = chart.get("title") or f"Experiment {xid_int}"
-                    state = "RUNNING" if "tuned_v1" in str(chart.get("name", "")) else "COMPLETED"
                     experiments[xid_int] = {
                         "name": f"experiments/{xid_int}",
                         "xid": xid_int,
-                        "title": title,
-                        "state": state,
+                        "title": chart.get("title") or f"Experiment {xid_int}",
+                        "state": "RUNNING"
+                        if "tuned_v1" in str(chart.get("name", ""))
+                        else "COMPLETED",
                     }
 
-        # 2. Extract from loaded golden chart files
+    @classmethod
+    def _collect_golden_experiments(cls, experiments: dict[int, dict[str, Any]]) -> None:
         for golden_name, golden_data in cls.goldens.items():
             if not isinstance(golden_data, dict):
                 continue
-            xid = golden_data.get("xid")
             golden_xid: int | None = None
-            if xid is not None:
-                try:
+            if (xid := golden_data.get("xid")) is not None:
+                with contextlib.suppress(ValueError, TypeError):
                     golden_xid = int(xid)
-                except (ValueError, TypeError):
-                    pass
-            if golden_xid is None:
-                match = re.search(r"experiments/(\d+)", golden_name)
-                if match:
-                    golden_xid = int(match.group(1))
-
+            if golden_xid is None and (match := re.search(r"experiments/(\d+)", golden_name)):
+                golden_xid = int(match.group(1))
             if golden_xid is not None and golden_xid not in experiments:
                 experiments[golden_xid] = {
                     "name": f"experiments/{golden_xid}",
@@ -395,7 +387,12 @@ class SPAHandler(server.SPAHandler):  # type: ignore[misc, unused-ignore]
                     "state": "COMPLETED",
                 }
 
-        # 3. Fallback baseline if no test datasets are found
+    @classmethod
+    def get_experiments(cls) -> list[dict[str, Any]]:
+        """Dynamically extracts distinct experiments from loaded test datasets."""
+        experiments: dict[int, dict[str, Any]] = {}
+        cls._collect_dashboard_experiments(experiments)
+        cls._collect_golden_experiments(experiments)
         if not experiments:
             return [
                 {

@@ -24,12 +24,13 @@ import subprocess
 import sys
 import tempfile
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, TextIO
 
 DEFAULT_BACKEND = "spanner"
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(kw_only=True)
@@ -99,7 +100,7 @@ def ensure_venv(venv_dir: Path | None = None) -> None:
         try:
             _bootstrap_venv(resolved_venv)
         except Exception:
-            logging.exception("Failed to bootstrap virtual environment")
+            _LOGGER.exception("Failed to bootstrap virtual environment")
             return
         venv_python = resolved_venv / "bin" / "python3"
         if not venv_python.exists():
@@ -136,14 +137,16 @@ class HandledError(Exception):
     details optionally carries structured data that run_tool adds to the error JSON.
     """
 
-    def __init__(self, message, instruction, details: Mapping[str, Any] | None = None):
+    def __init__(
+        self, message: str, instruction: str, details: Mapping[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.instruction = instruction
         self.details = details
 
 
-def run_tool(parser: argparse.ArgumentParser, main_fn):
+def run_tool(parser: argparse.ArgumentParser, main_fn: Callable[[argparse.Namespace], Any]) -> None:
     """Standard runner for tools.
 
     - Handles `--help` automatically via argparse.
@@ -357,8 +360,8 @@ def parse_yaml_vars(config_path: Path) -> dict[str, Any]:
         if isinstance(data, dict):
             vars_data = data.get("vars") or {}
             return {k: v for k, v in vars_data.items() if isinstance(v, (str, int, float, bool))}
-    except Exception:  # pylint: disable=broad-except
-        pass
+    except Exception as e:  # pylint: disable=broad-except
+        _LOGGER.debug("PyYAML unavailable or YAML parse fell back for %s: %s", config_path, e)
 
     return _parse_yaml_vars_line_fallback(content)
 

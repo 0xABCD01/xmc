@@ -16,6 +16,7 @@
 """XMC v2 Dev Environment Deployment Script."""
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -299,7 +300,7 @@ def _dns_transaction_abort(dns_project: str, dns_zone: str) -> None:
         dns_project: GCP Project ID hosting the DNS zone.
         dns_zone: Cloud DNS Managed Zone name.
     """
-    try:
+    with contextlib.suppress(subprocess.CalledProcessError):
         run_command(
             [
                 "gcloud",
@@ -312,9 +313,7 @@ def _dns_transaction_abort(dns_project: str, dns_zone: str) -> None:
             ],
             capture_output=True,
             log_on_error=False,
-        )
-    except subprocess.CalledProcessError:
-        pass  # Ignore if no transaction was active
+        )  # Ignore if no transaction was active
 
 
 def _dns_transaction_start(dns_project: str, dns_zone: str) -> None:
@@ -490,29 +489,29 @@ def run_gcluster_deploy(deployment_name: str, group: str) -> None:
 # --- Steps implementation ---
 
 
-def step_check(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_check(_config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Verifies pre-flight checks (noop step for status check).
 
     Args:
-        config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _config: The loaded DeploymentConfig instance (unused).
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     log_success("Pre-flight checks verified.")
 
 
 def step_compile(
     config: DeploymentConfig,
-    dns_project: str,
-    dns_zone: str,
+    _dns_project: str,
+    _dns_zone: str,
     config_path: str,
 ) -> None:
     """Compiles the XMC blueprint using gcluster.
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
         config_path: Path to the configuration file.
     """
     log_info("Compiling XMC blueprint using gcluster...")
@@ -520,13 +519,13 @@ def step_compile(
     log_success("Blueprint compiled successfully under 'ctk-out/'.")
 
 
-def step_apis(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_apis(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Deploys the APIs group (API enablement).
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     log_info("Deploying apis group (API enablement)...")
     run_gcluster_deploy(config.deployment_name, "apis")
@@ -588,26 +587,26 @@ def step_migrate(config: DeploymentConfig) -> None:
     apply_pending_migrations(config, pending)
 
 
-def step_compute(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_compute(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Deploys the compute group (GKE Cluster and Node pools).
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     log_info("Deploying compute group (GKE Cluster and Node pools)...")
     run_gcluster_deploy(config.deployment_name, "compute")
     log_success("Compute group (GKE cluster and Node pools) deployed successfully.")
 
 
-def step_gateway_api(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_gateway_api(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Enables GKE Gateway API on the cluster if not already enabled.
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
 
     Raises:
         RuntimeError: If cluster description fails.
@@ -651,13 +650,13 @@ def step_gateway_api(config: DeploymentConfig, dns_project: str, dns_zone: str) 
         log_info("Gateway API standard channel is already enabled.")
 
 
-def step_prereqs(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_prereqs(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Deploys kubernetes_prereqs group (cert-manager, Kueue, Jobset).
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     log_info("Deploying kubernetes_prereqs group (cert-manager, Kueue, Jobset)...")
     run_gcluster_deploy(config.deployment_name, "kubernetes_prereqs")
@@ -693,15 +692,15 @@ def _fetch_cluster_credentials(config: DeploymentConfig) -> None:
 
 def step_app(
     config: DeploymentConfig,
-    dns_project: str,
-    dns_zone: str,
+    _dns_project: str,
+    _dns_zone: str,
 ) -> None:
     """Deploys xmc_app group (Helm release) and triggers rolling restarts.
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     verify_schema_version_alignment(config)
     log_info("Deploying xmc_app group (Helm release)...")
@@ -801,13 +800,13 @@ def _build_verify_env(config: DeploymentConfig) -> dict[str, str]:
     }
 
 
-def step_verify(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_verify(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Verifies the deployed XMC environment.
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone (unused).
-        dns_zone: Cloud DNS Managed Zone name (unused).
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     _fetch_cluster_credentials(config)
     wait_for_deployments_ready(config)
