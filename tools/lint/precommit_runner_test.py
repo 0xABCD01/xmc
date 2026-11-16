@@ -399,6 +399,45 @@ class LanguageChecksTest(unittest.TestCase):
         self.assertTrue(ctx_sh_missing.failed)
         self.assertIn(runner._SHELLCHECK_HINT, buf.getvalue())
 
+    def test_check_nonui_js(self):
+        ctx_cfg = gates.RunContext(mode="fix")
+        with (
+            mock.patch.object(gates, "staged_paths_match", return_value=True),
+            mock.patch.object(gates, "git_ls_files", return_value=[".github/scripts/a.js"]),
+            mock.patch.object(gates, "resolve_ui_binary", return_value="eslint"),
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+            ) as exec_mock,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_nonui_js(ctx_cfg)
+        self.assertFalse(ctx_cfg.failed)
+        self.assertEqual(
+            exec_mock.call_args.args[0],
+            [
+                "eslint",
+                "--no-config-lookup",
+                "-c",
+                "tools/lint/eslint.nonui.config.mjs",
+                ".github/scripts/a.js",
+            ],
+        )
+
+        ctx_fail = gates.RunContext(mode="fix")
+        with (
+            mock.patch.object(gates, "staged_paths_match", return_value=False),
+            mock.patch.object(
+                gates, "git_staged_paths", return_value=[".github/scripts/a.js", "cmd/ui/b.js"]
+            ),
+            mock.patch.object(gates, "resolve_ui_binary", return_value="eslint"),
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
+            ),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_nonui_js(ctx_fail)
+        self.assertTrue(ctx_fail.failed)
+
 
 class OrchestrationAndMainTest(unittest.TestCase):
     @contextlib.contextmanager
@@ -417,6 +456,7 @@ class OrchestrationAndMainTest(unittest.TestCase):
                 (runner, "check_mypy"),
                 (runner, "check_workflows"),
                 (runner, "check_shell"),
+                (runner, "check_nonui_js"),
                 (deploy_checks, "check_deploy"),
             ):
                 stack.enter_context(mock.patch.object(target, attr))

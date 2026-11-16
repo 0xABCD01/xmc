@@ -286,6 +286,42 @@ def check_shell(ctx: gates.RunContext) -> None:
             ctx.fail("shellcheck failed.")
 
 
+_NONUI_JS_GLOBS = (
+    ":(glob).github/scripts/**/*.js",
+    ":(glob)tools/nightly_tests/**/*.js",
+    ":(glob)cmd/experiment_state_server/static/**/*.js",
+)
+_NONUI_JS_PATTERN = (
+    r"^(\.github/scripts|tools/nightly_tests|cmd/experiment_state_server/static)/.*\.js$"
+)
+
+
+def check_nonui_js(ctx: gates.RunContext) -> None:
+    """Runs ESLint on non-UI JavaScript files using `tools/lint/eslint.nonui.config.mjs`."""
+    if ctx.mode == "check" or gates.staged_paths_match(
+        "ACMR", r"^tools/lint/eslint\.nonui\.config\.mjs$"
+    ):
+        files = gates.git_ls_files(_NONUI_JS_GLOBS)
+    else:
+        regex = re.compile(_NONUI_JS_PATTERN)
+        files = [p for p in gates.git_staged_paths("ACMR") if regex.search(p)]
+    if not files:
+        return
+    eslint = gates.resolve_ui_binary(ctx, "eslint")
+    if not eslint:
+        return
+    print("--> Running Non-UI JS Linter (ESLint)...")
+    for batch in gates.chunked(files, 500):
+        if (
+            gates.exec_cmd(
+                [eslint, "--no-config-lookup", "-c", "tools/lint/eslint.nonui.config.mjs", *batch],
+                cwd=gates.REPO_ROOT,
+            ).returncode
+            != 0
+        ):
+            ctx.fail("Non-UI JS ESLint check failed.")
+
+
 def _autostage(subcommand: str, state_path: str) -> bool:
     cmd = [sys.executable, "tools/lint/precommit_autostage.py", subcommand, "--state", state_path]
     return gates.exec_cmd(cmd, quiet_out=True).returncode == 0
@@ -311,6 +347,7 @@ def _run_linter_phase(mode: str) -> bool:
             deploy_checks.check_deploy,
             check_workflows,
             check_shell,
+            check_nonui_js,
         ):
             fn(ctx)
         if mode == "fix":
