@@ -71,6 +71,23 @@ class LanguageChecksTest(unittest.TestCase):
         self.assertTrue(ctx.failed)
         self.assertEqual(run_mode.call_count, 2)
 
+        ctx_win = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(runner.shutil, "which", return_value=None),
+            mock.patch.object(gates, "resolve_go_tool", return_value=None),
+            mock.patch.object(runner.os, "sep", "\\"),
+            mock.patch.object(
+                gates,
+                "exec_cmd",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, stdout="pkg\\vendor\\a.go\n", stderr=""
+                ),
+            ),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_go(ctx_win)
+        self.assertFalse(ctx_win.failed)
+
     def test_check_go_skips_determinism_without_go_and_chunks_gofmt(self):
         ctx_nogo = gates.RunContext(mode="check")
         with (

@@ -73,7 +73,10 @@ def _check_gofmt(ctx: gates.RunContext) -> None:
             if res.stderr:
                 print(res.stderr.strip(), file=sys.stderr)
             ctx.fail("gofmt check failed.")
-        elif bad := [line for line in res.stdout.splitlines() if line and "vendor/" not in line]:
+        sep = os.sep
+        if bad := [
+            p for p in res.stdout.splitlines() if p and "vendor/" not in p.replace(sep, "/")
+        ]:
             print("❌ Unformatted Go files found:\n" + "\n".join(bad))
             ctx.failed = True
         return
@@ -150,13 +153,9 @@ def check_license(ctx: gates.RunContext) -> None:
     if not addlicense:
         return
     print("--> Running License Header Check (addlicense)...")
-    flags = [
-        "-c",
-        "Google LLC",
-        "-l",
-        "apache",
-        *(a for p in _LICENSE_IGNORE_PATTERNS.split() for a in ("-ignore", p)),
-    ]
+    flags = ["-c", "Google LLC", "-l", "apache"]
+    for pattern in _LICENSE_IGNORE_PATTERNS.split():
+        flags.extend(("-ignore", pattern))
     files = ["."] if ctx.mode == "check" else gates.git_staged_paths("ACMR")
     if files:
         gates.run_mode_command(
@@ -187,9 +186,7 @@ def check_python(ctx: gates.RunContext) -> None:
     if not resolved:
         return
     base, is_docker = resolved
-    print(
-        "--> Running Ruff (Docker)..." if is_docker else "--> Running Ruff (Linter & Formatter)..."
-    )
+    print(f"--> Running Ruff ({'Docker' if is_docker else 'Linter & Formatter'})...")
     extra = ["--no-cache"] if is_docker else []
     for sub, chk, fx, msg in (
         (["check", *extra], [], ["--fix"], "Ruff lint check failed."),
@@ -261,7 +258,7 @@ def _run_linter_phase(mode: str) -> bool:
             if state_path is None and (rc := gates.exec_cmd(["git", "diff", "--quiet"]).returncode):
                 msg = (
                     "git diff failed."
-                    if rc not in (0, 1)
+                    if rc != 1
                     else "Linters fixed formatting! Stage and re-commit."
                 )
                 print(f"\n❌ PRE-COMMIT HOOK FAILED: {msg}")
