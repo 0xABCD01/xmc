@@ -24,7 +24,7 @@ locals {
         }
       ],
       [
-        for worker_project_id in compact(var.worker_project_ids) : {
+        for worker_project_id in toset(compact(var.worker_project_ids)) : {
           target_project_id = worker_project_id
           sa_project_id     = worker_project_id
         } if worker_project_id != var.project_id

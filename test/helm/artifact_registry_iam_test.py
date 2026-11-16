@@ -73,7 +73,7 @@ class ArtifactRegistryIamTest(unittest.TestCase):
             'resource "google_project_iam_member" "default_compute_sa_artifact_registry_reader"',
             main_tf,
         )
-        self.assertIn('role     = "roles/artifactregistry.reader"', main_tf)
+        self.assertRegex(main_tf, r'role\s*=\s*"roles/artifactregistry\.reader"')
         self.assertIn("-compute@developer.gserviceaccount.com", main_tf)
         self.assertIn('variable "project_id"', variables_tf)
         self.assertIn('variable "worker_project_ids"', variables_tf)
