@@ -28,8 +28,8 @@ declare global {
 
   namespace jasmine {
     interface AsyncMatchers<T, U> {
-      toEmit(expectedValue: any): Promise<void>;
-      toEmitSequence(expectedSequence: any[]): Promise<void>;
+      toEmit(expectedValue: unknown): Promise<void>;
+      toEmitSequence(expectedSequence: unknown[]): Promise<void>;
       toHaveNeverEmitted(): Promise<void>;
     }
   }
