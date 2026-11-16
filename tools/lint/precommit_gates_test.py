@@ -90,15 +90,22 @@ class GitDiscoveryTest(unittest.TestCase):
         self.assertEqual(run_mock.call_args.kwargs["errors"], "surrogateescape")
 
     def test_git_ls_files_dedupes_and_handles_failure(self):
-        ok_proc = subprocess.CompletedProcess([], 0, stdout="b.sh\na.sh\nb.sh\n\n", stderr="")
+        ok_proc = subprocess.CompletedProcess([], 0, stdout="b.sh\0a.sh\0b.sh\0\0", stderr="")
         with mock.patch.object(gates, "exec_cmd", return_value=ok_proc) as run_mock:
-            files = gates.git_ls_files(["*.sh"], include_untracked=True)
+            files = gates.git_ls_files(["*.sh"])
         self.assertEqual(files, ["a.sh", "b.sh"])
-        self.assertIn("--exclude-standard", run_mock.call_args.args[0])
+        self.assertIn("-z", run_mock.call_args.args[0])
+        self.assertEqual(run_mock.call_args.kwargs["cwd"], gates.REPO_ROOT)
 
-        fail_proc = subprocess.CompletedProcess([], 1, stdout="", stderr="")
-        with mock.patch.object(gates, "exec_cmd", return_value=fail_proc):
-            self.assertEqual(gates.git_ls_files(["*.sh"]), [])
+        fail_proc = subprocess.CompletedProcess([], 1, stdout="", stderr="bad ls")
+        with (
+            mock.patch.object(gates, "exec_cmd", return_value=fail_proc),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err_buf,
+            self.assertRaises(SystemExit) as cm,
+        ):
+            gates.git_ls_files(["*.sh"])
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("bad ls", err_buf.getvalue())
 
     def test_walk_repo_files_collect_target_files_and_should_run_scope(self):
         with tempfile.TemporaryDirectory() as tmpdir:

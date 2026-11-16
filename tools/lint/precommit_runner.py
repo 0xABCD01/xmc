@@ -249,7 +249,7 @@ def check_workflows(ctx: gates.RunContext) -> None:
     if not actionlint:
         return
     print("--> Running GitHub Actions Workflow Linter (actionlint)...")
-    if gates.exec_cmd([actionlint]).returncode != 0:
+    if gates.exec_cmd([actionlint], cwd=gates.REPO_ROOT).returncode != 0:
         ctx.fail("actionlint failed.")
 
 
@@ -266,8 +266,14 @@ def check_shell(ctx: gates.RunContext) -> None:
         ctx.warn_missing("shellcheck not found. Shell script linting skipped.")
         return
     print("--> Running Shell Script Linter (shellcheck)...")
-    if gates.exec_cmd([shellcheck, "-S", "style", "-e", "SC1091", *files]).returncode != 0:
-        ctx.fail("shellcheck failed.")
+    for batch in gates.chunked(files, 500):
+        if (
+            gates.exec_cmd(
+                [shellcheck, "-S", "style", "-e", "SC1091", *batch], cwd=gates.REPO_ROOT
+            ).returncode
+            != 0
+        ):
+            ctx.fail("shellcheck failed.")
 
 
 def _autostage(subcommand: str, state_path: str) -> bool:

@@ -160,15 +160,19 @@ def staged_paths_match(diff_filter: str, pattern: str) -> bool:
     return any(regex.search(path) for path in git_staged_paths(diff_filter, no_renames=True))
 
 
-def git_ls_files(pathspecs: Sequence[str], *, include_untracked: bool = False) -> list[str]:
-    """Lists sorted unique paths returned by `git ls-files` for `pathspecs`."""
-    cmd = ["git", "-c", "core.quotePath=false", "ls-files"]
-    if include_untracked:
-        cmd.extend(["--cached", "--others", "--exclude-standard"])
-    res = exec_cmd([*cmd, "--", *pathspecs], capture=True, quiet_err=True)
+def git_ls_files(pathspecs: Sequence[str]) -> list[str]:
+    """Lists NUL-delimited sorted unique paths from `git ls-files`, exiting 1 if git fails."""
+    res = exec_cmd(
+        ["git", "-c", "core.quotePath=false", "ls-files", "-z", "--", *pathspecs],
+        cwd=REPO_ROOT,
+        capture=True,
+    )
     if res.returncode != 0:
-        return []
-    return sorted({line for line in res.stdout.splitlines() if line})
+        print("❌ git ls-files failed; cannot select pre-commit targets.", file=sys.stderr)
+        if res.stderr:
+            print(res.stderr.strip(), file=sys.stderr)
+        raise SystemExit(1)
+    return sorted({path for path in res.stdout.split("\0") if path})
 
 
 def walk_repo_files(

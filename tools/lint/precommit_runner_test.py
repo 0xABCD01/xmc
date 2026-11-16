@@ -263,11 +263,37 @@ class LanguageChecksTest(unittest.TestCase):
             mock.patch.object(gates, "resolve_go_tool", return_value="/bin/actionlint"),
             mock.patch.object(
                 gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
-            ),
+            ) as wf_exec,
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
             runner.check_workflows(ctx_wf)
         self.assertTrue(ctx_wf.failed)
+        self.assertEqual(wf_exec.call_args.kwargs["cwd"], gates.REPO_ROOT)
+
+        ctx_wf_skip = gates.RunContext(mode="fix")
+        with (
+            mock.patch.object(gates, "staged_paths_match", return_value=False),
+            mock.patch.object(gates, "resolve_go_tool") as wf_resolve,
+        ):
+            runner.check_workflows(ctx_wf_skip)
+        wf_resolve.assert_not_called()
+
+        ctx_wf_empty = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "git_ls_files", return_value=[]),
+            mock.patch.object(gates, "resolve_go_tool") as wf_empty_resolve,
+        ):
+            runner.check_workflows(ctx_wf_empty)
+        wf_empty_resolve.assert_not_called()
+
+        ctx_wf_missing = gates.RunContext(mode="fix")
+        with (
+            mock.patch.object(gates, "staged_paths_match", return_value=True),
+            mock.patch.object(gates, "resolve_go_tool", return_value=None),
+            mock.patch.object(gates, "exec_cmd") as wf_missing_exec,
+        ):
+            runner.check_workflows(ctx_wf_missing)
+        wf_missing_exec.assert_not_called()
 
         ctx_sh = gates.RunContext(mode="fix")
         with (
@@ -280,9 +306,33 @@ class LanguageChecksTest(unittest.TestCase):
         ):
             runner.check_shell(ctx_sh)
         self.assertFalse(ctx_sh.failed)
+        self.assertEqual(exec_mock.call_args.kwargs["cwd"], gates.REPO_ROOT)
         self.assertEqual(
             exec_mock.call_args.args[0], ["/bin/shellcheck", "-S", "style", "-e", "SC1091", "a.sh"]
         )
+
+        many_sh = [f"scripts/s{i}.sh" for i in range(501)]
+        ctx_sh_fail = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "git_ls_files", return_value=many_sh),
+            mock.patch.object(gates, "resolve_binary", return_value="/bin/shellcheck"),
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
+            ) as sh_fail_exec,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_shell(ctx_sh_fail)
+        self.assertTrue(ctx_sh_fail.failed)
+        self.assertEqual(sh_fail_exec.call_count, 2)
+
+        ctx_sh_missing = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "git_ls_files", return_value=["a.sh"]),
+            mock.patch.object(gates, "resolve_binary", return_value=None),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_shell(ctx_sh_missing)
+        self.assertTrue(ctx_sh_missing.failed)
 
 
 class OrchestrationAndMainTest(unittest.TestCase):
