@@ -69,18 +69,20 @@ func (s *batchStorage) RunInTransaction(ctx context.Context, fn func(ctx context
 	})
 }
 
-func (s *batchStorage) InsertWorkUnit(ctx context.Context, wu *msgpb.WorkUnit) error {
-	if err := s.MockStorage.InsertWorkUnit(ctx, wu); err != nil {
+func (s *batchStorage) InsertWorkUnits(ctx context.Context, wus []*msgpb.WorkUnit) error {
+	if err := s.MockStorage.InsertWorkUnits(ctx, wus); err != nil {
 		return err
 	}
-	_, wid, err := validator.ValidateWorkUnitName(wu.GetName())
-	if err != nil {
-		return nil // Work units with invalid names cannot be updated later.
+	for _, wu := range wus {
+		_, wid, err := validator.ValidateWorkUnitName(wu.GetName())
+		if err != nil {
+			continue // Work units with invalid names cannot be updated later.
+		}
+		if s.workUnits == nil {
+			s.workUnits = make(map[int64]*msgpb.WorkUnit)
+		}
+		s.workUnits[wid] = proto.Clone(wu).(*msgpb.WorkUnit)
 	}
-	if s.workUnits == nil {
-		s.workUnits = make(map[int64]*msgpb.WorkUnit)
-	}
-	s.workUnits[wid] = proto.Clone(wu).(*msgpb.WorkUnit)
 	return nil
 }
 
@@ -174,8 +176,8 @@ func TestBatchCreateWorkUnits_CreatesTrialsInOneTransaction(t *testing.T) {
 	if diff := cmp.Diff([]string{"trial-1", "trial-2", "trial-3"}, gotTrials); diff != "" {
 		t.Errorf("created work unit notes mismatch (-want +got):\n%s", diff)
 	}
-	if st.txCalls != 1 || st.UpdatedExperiment == nil || st.InsertedWorkUnit.GetName() != wantNames[2] {
-		t.Errorf("transactions = %d, experiment updated = %v, last inserted = %q; want 1, true, %q", st.txCalls, st.UpdatedExperiment != nil, st.InsertedWorkUnit.GetName(), wantNames[2])
+	if st.txCalls != 1 || st.UpdatedExperiment == nil || len(st.InsertedWorkUnits) != 3 {
+		t.Errorf("transactions = %d, experiment updated = %v, inserted = %d; want 1, true, 3", st.txCalls, st.UpdatedExperiment != nil, len(st.InsertedWorkUnits))
 	}
 	var gotOps []string
 	for _, op := range st.operations {
@@ -260,7 +262,7 @@ func TestBatchCreateWorkUnits_Rejections(t *testing.T) {
 		{name: "unknown execution environment", opts: []testServerOpt{withConfig(&config.Config{DefaultExecutionEnvironment: "unknown"})}, wantCode: codes.Internal, wantErrSub: "requests[0]"},
 		{name: "storage failure", storage: func() *batchStorage {
 			st := newBatchStorage("test@example.com")
-			st.InsertWorkUnitErr = errors.New("insert failed")
+			st.InsertWorkUnitsErr = errors.New("insert failed")
 			return st
 		}, wantCode: codes.Internal},
 	}
@@ -285,8 +287,8 @@ func TestBatchCreateWorkUnits_Rejections(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.wantErrSub) {
 				t.Errorf("BatchCreateWorkUnits() = %v, want it to contain %q", err, tt.wantErrSub)
 			}
-			if st.InsertedWorkUnit != nil || len(actuator.EnqueuedTasks) != 0 {
-				t.Errorf("rejected request inserted %v and enqueued %d tasks, want none", st.InsertedWorkUnit, len(actuator.EnqueuedTasks))
+			if len(st.InsertedWorkUnits) != 0 || len(actuator.EnqueuedTasks) != 0 {
+				t.Errorf("rejected request inserted %d work units and enqueued %d tasks, want none", len(st.InsertedWorkUnits), len(actuator.EnqueuedTasks))
 			}
 		})
 	}
