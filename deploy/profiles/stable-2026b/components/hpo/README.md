@@ -3,7 +3,7 @@
 This Helm sub-chart (`deploy/profiles/stable-2026b/components/hpo/`) defines the XMC 1P Native Component blueprint ([`templates/component.yaml`](templates/component.yaml)) for **Hyperparameter Optimization (HPO)** (`hyperparameter-optimization`) and the `xmc-study-controller` workload that `xmc-bridge` actuates for it ([`templates/deployment.yaml`](templates/deployment.yaml), [`templates/serviceaccount.yaml`](templates/serviceaccount.yaml)).
 
 > [!NOTE]
-> The `xmc-study-controller` workload is a `Deployment` and a plain `ServiceAccount` only. It consumes study reconcile ticks from Redis and logs them, and serves health and metrics endpoints; it does not yet reconcile studies. The chart renders no `Service`, `Role`/`RoleBinding`, `NetworkPolicy` or `ConfigMap`, and the `ServiceAccount` carries no Workload Identity annotation.
+> The `xmc-study-controller` workload is a `Deployment` and a plain `ServiceAccount` only. It consumes study reconcile ticks from Redis under a per-study Redis lease lock and logs them, and serves health and metrics endpoints; it does not yet reconcile studies. The chart renders no `Service`, `Role`/`RoleBinding`, `NetworkPolicy` or `ConfigMap`, and the `ServiceAccount` carries no Workload Identity annotation.
 
 ---
 
@@ -72,12 +72,22 @@ The Study Controller connects to the XMC Redis server:
 
 ### Study Reconcile Ticks
 
-The Study Controller consumes the `xmc-study-reconcile-stream` Redis stream as the `study-controller-group` consumer group. Each message is a protojson `StudyReconcilePayload` (`{"experiment": "experiments/{xid}"}`) that names a study; ticks are unsigned hints, delivered at least once. The controller logs each valid tick at debug level with the study's XID (`Received study reconcile tick`) and acknowledges it; it does not reconcile the study yet. A payload that does not name a valid experiment, or a message without data, goes to the `xmc-study-reconcile-dlq-stream` dead-letter stream without a retry. The controller re-creates the consumer group when Redis loses it, for example after a restart without persistence.
+The Study Controller consumes the `xmc-study-reconcile-stream` Redis stream as the `study-controller-group` consumer group, sharing a single Redis connection pool across stream consumption, per-study locking, and `/readyz`. Each message is a protojson `StudyReconcilePayload` (`{"experiment": "experiments/{xid}"}`) that names a study; ticks are unsigned hints, delivered at least once.
+
+Each delivered tick is classified by outcome (`xmc_study_controller_reconcile_ticks_total{outcome}`); for valid payloads, the controller acquires a distributed per-study lease at `xmc:study-reconcile-lock:{xid}` (`SET ... NX PX` with a random 16-byte token, 15s lease TTL up to a 60s reconcile timeout, and token-checked Lua `DEL`):
+
+- **Acquired (`reconciled`)**: reconciles the study (currently a stub), releases the lease, logs `Processed study reconcile tick` at info level with the study's XID, and acknowledges the tick.
+- **Already held (`contended`)**: logs `Skipped contended study reconcile tick` at info level and acknowledges the tick without reconciling so multi-replica deployments never reconcile the same study concurrently.
+- **Lock or reconcile failure (`retry_error`)**: releases any acquired lease if still owned and retries the tick via stream redelivery.
+- **Malformed payload (`invalid_payload`)**: a payload whose `data` does not decode to a valid `experiments/{xid}` resource name goes to the `xmc-study-reconcile-dlq-stream` dead-letter stream without acquiring the lock or retrying (raw stream entries missing a `data` field are dead-lettered directly by the stream consumer before the handler runs).
+
+The controller re-creates the consumer group when Redis loses it, for example after a restart without persistence.
 
 The Experiment State Server publishes one tick when it creates a `STUDY` experiment; see [Create Experiment](../../../../../docs/flows/experiment_lifecycle.md#1-create-experiment).
 
+- **Metrics**: `GET /metrics` exposes `xmc_study_controller_reconcile_ticks_total{outcome="reconciled|contended|retry_error|invalid_payload"}`.
 - **Troubleshooting**: to inspect dead-lettered ticks and the reason each was rejected, run `XRANGE xmc-study-reconcile-dlq-stream - +` in `redis-cli`.
-- **Shutdown**: on SIGTERM the controller stops its HTTP server (up to 5s), then drains the consumer (up to 8s) so a tick being handled is still acknowledged. Ticks it has not started stay pending and are reclaimed later. If you set the Component's `lifecycleControl.drainTimeoutSeconds`, set it to at least 8: the pod's termination grace period is that value plus 5s.
+- **Shutdown**: on SIGTERM the controller stops its HTTP server (up to 5s), then drains the consumer (up to 10s) so an in-flight tick releases its per-study lock (2s detached timeout) and settles on the stream (5s detached timeout). Ticks it has not started stay pending and are reclaimed later. If you set the Component's `lifecycleControl.drainTimeoutSeconds`, set it to at least 10: the pod's termination grace period is that value plus 5s.
 
 ### Image Resolution
 

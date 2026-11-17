@@ -30,6 +30,7 @@ import (
 	"xmanager_cloud/cmd/study_controller/config"
 	"xmanager_cloud/cmd/study_controller/worker"
 	"xmanager_cloud/internal/logging"
+	"xmanager_cloud/internal/task_queue_redis/redisclient"
 )
 
 // waitHealthy polls GET /healthz at addr until it returns 200 OK or the deadline passes.
@@ -98,6 +99,36 @@ func TestRun_CancelledContextExitsZero(t *testing.T) {
 
 	if got := run(ctx, args); got != 0 {
 		t.Errorf("run(%v) with a cancelled context = %d, want 0", args, got)
+	}
+}
+
+type noopRedisClient struct{ redisclient.Client }
+
+func (noopRedisClient) Close() error { return nil }
+
+func TestServeWithClient_RejectsInvalidClients(t *testing.T) {
+	nonLockClient := worker.NewRedisConsumer("127.0.0.1:" + freePort(t))
+	_ = nonLockClient.Close(context.Background())
+	nonLockClient.Client = noopRedisClient{}
+
+	tests := []struct {
+		name   string
+		client *redisclient.ConsumerClient
+	}{
+		{name: "nil consumer client", client: nil},
+		{name: "non-locking underlying client", client: nonLockClient},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lis, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("net.Listen() error = %v", err)
+			}
+			defer lis.Close()
+			if err := serveWithClient(context.Background(), lis, tc.client); err == nil {
+				t.Errorf("serveWithClient(%+v) error = nil, want non-nil", tc.client)
+			}
+		})
 	}
 }
 
@@ -170,7 +201,11 @@ func TestStopConsumer_LogsCloseFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	client := worker.NewRedisConsumer("127.0.0.1:" + freePort(t))
-	consumer := worker.Start(ctx, client)
+	handler, err := worker.NewRedisHandler(client)
+	if err != nil {
+		t.Fatalf("NewRedisHandler() error = %v", err)
+	}
+	consumer := worker.Start(ctx, client, handler)
 	// Closing the client first makes the consumer's own close fail.
 	if err := client.Close(context.Background()); err != nil {
 		t.Fatalf("client.Close() error = %v", err)

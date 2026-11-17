@@ -17,45 +17,272 @@ package worker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/redis/go-redis/v9"
+	"xmanager_cloud/internal/kubernetes/common/constants"
 	"xmanager_cloud/internal/logging"
+	"xmanager_cloud/internal/redislock"
+	"xmanager_cloud/internal/task_queue_redis/redisclient"
 )
 
-func TestHandleTask(t *testing.T) {
-	t.Parallel()
+type fakeLease struct {
+	mu                 sync.Mutex
+	releaseFn          func(ctx context.Context) error
+	releaseCalls       int
+	releaseCtxErr      error
+	releaseHasDeadline bool
+}
 
+func (l *fakeLease) Release(ctx context.Context) error {
+	l.mu.Lock()
+	l.releaseCalls++
+	l.releaseCtxErr = ctx.Err()
+	_, l.releaseHasDeadline = ctx.Deadline()
+	fn := l.releaseFn
+	l.mu.Unlock()
+	if fn != nil {
+		return fn(ctx)
+	}
+	return nil
+}
+
+type fakeLocker struct {
+	mu      sync.Mutex
+	lease   Lease
+	err     error
+	lastKey string
+	calls   int
+}
+
+func (f *fakeLocker) Acquire(_ context.Context, key string) (Lease, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.lastKey = key
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.lease, nil
+}
+
+type stubLockClient struct {
+	redisclient.Client
+	redis.Scripter
+	setErr error
+}
+
+func (s *stubLockClient) SetArgs(_ context.Context, _ string, _ any, _ redis.SetArgs) *redis.StatusCmd {
+	if s.setErr != nil {
+		return redis.NewStatusResult("", s.setErr)
+	}
+	return redis.NewStatusResult("OK", nil)
+}
+
+func (s *stubLockClient) EvalSha(_ context.Context, _ string, _ []string, _ ...any) *redis.Cmd {
+	cmd := redis.NewCmd(context.Background())
+	cmd.SetVal(int64(1))
+	return cmd
+}
+
+func snapshotOutcomes() map[string]float64 {
+	outcomes := []string{outcomeReconciled, outcomeContended, outcomeRetryError, outcomeInvalidPayload}
+	snap := make(map[string]float64, len(outcomes))
+	for _, o := range outcomes {
+		snap[o] = testutil.ToFloat64(reconcileTicksTotal.WithLabelValues(o))
+	}
+	return snap
+}
+
+func diffOutcomes(before map[string]float64) map[string]float64 {
+	deltas := make(map[string]float64)
+	for k, v := range snapshotOutcomes() {
+		if delta := v - before[k]; delta != 0 {
+			deltas[k] = delta
+		}
+	}
+	return deltas
+}
+
+func newLogContext(buf *bytes.Buffer) context.Context {
+	return logging.WithLogger(context.Background(), slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+}
+
+func TestNewHandler_ValidationAndRedisWiring(t *testing.T) {
+	valid := &fakeLocker{lease: &fakeLease{}}
 	tests := []struct {
-		name        string
-		data        string
-		wantSuccess bool
-		wantLogs    []string
+		name    string
+		params  HandlerParams
+		wantErr bool
 	}{
-		{name: "valid tick is acknowledged", data: `{"experiment":"experiments/123"}`, wantSuccess: true,
-			wantLogs: []string{"Received study reconcile tick", "worker_id=worker-1", "xid=123"}},
-		{name: "malformed payload is dead-lettered", data: `not json`, wantLogs: []string{"Dropping invalid study reconcile tick", "payload_bytes=8"}},
-		{name: "invalid experiment is dead-lettered", data: `{"experiment":"xids/123"}`, wantLogs: []string{"Dropping invalid study reconcile tick"}},
+		{name: "nil locker", params: HandlerParams{}, wantErr: true},
+		{name: "negative reconcile timeout", params: HandlerParams{Locker: valid, ReconcileTimeout: -time.Second}, wantErr: true},
+		{name: "negative release timeout", params: HandlerParams{Locker: valid, ReleaseTimeout: -time.Second}, wantErr: true},
+		{name: "reconcile timeout at process timeout", params: HandlerParams{Locker: valid, ReconcileTimeout: constants.RedisProcessTimeout}, wantErr: true},
+		{name: "valid defaults", params: HandlerParams{Locker: valid}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			got, err := NewHandler(tc.params)
+			if (err != nil) != tc.wantErr || (!tc.wantErr && got == nil) {
+				t.Fatalf("NewHandler(%+v) = (%v, %v), wantErr %v", tc.params, got, err, tc.wantErr)
+			}
+		})
+	}
+
+	var nonLockConsumer redisclient.ConsumerClient
+	typedNilConsumer := NewRedisConsumer("127.0.0.1:6379")
+	_ = typedNilConsumer.Close(context.Background())
+	typedNilConsumer.Client = (*redis.Client)(nil)
+	for _, bad := range []*redisclient.ConsumerClient{nil, &nonLockConsumer, typedNilConsumer} {
+		if _, err := NewRedisHandler(bad); err == nil {
+			t.Fatalf("NewRedisHandler(%+v) error = nil, want error", bad)
+		}
+	}
+
+	okConsumer := NewRedisConsumer("127.0.0.1:6379")
+	_ = okConsumer.Close(context.Background())
+	okConsumer.Client = &stubLockClient{}
+	h, err := NewRedisHandler(okConsumer)
+	if err != nil || !h.HandleTask(context.Background(), "w", `{"experiment":"experiments/55"}`).WasRunSuccessful {
+		t.Fatalf("NewRedisHandler(ok) err = %v or HandleTask failed", err)
+	}
+	okConsumer.Client = &stubLockClient{setErr: redis.Nil}
+	hContended, err := NewRedisHandler(okConsumer)
+	if err != nil || !hContended.HandleTask(context.Background(), "w", `{"experiment":"experiments/55"}`).WasRunSuccessful {
+		t.Fatalf("NewRedisHandler(contended) err = %v or HandleTask failed", err)
+	}
+}
+
+func TestHandleTask_OutcomesAndLockAcquisition(t *testing.T) {
+	acquireErr, reconcileErr := errors.New("redis connection refused"), errors.New("vizier unavailable")
+	const validTick = `{"experiment":"experiments/123"}`
+	const wantKey = "xmc:study-reconcile-lock:123"
+
+	tests := []struct {
+		name                            string
+		data                            string
+		acquireErr, recErr, releaseErr  error
+		wantSuccess, wantRetry, wantRec bool
+		wantErrIs                       error
+		wantAcquireCalls                int
+		wantKey                         string
+		wantMetrics                     map[string]float64
+		wantLogs                        []string
+	}{
+		{name: "fast reconcile", data: validTick, wantSuccess: true, wantAcquireCalls: 1, wantKey: wantKey, wantRec: true,
+			wantMetrics: map[string]float64{outcomeReconciled: 1}, wantLogs: []string{"Processed study reconcile tick", "worker_id=worker-1", "xid=123"}},
+		{name: "contended tick acked", data: validTick, acquireErr: redislock.ErrNotAcquired, wantSuccess: true, wantAcquireCalls: 1, wantKey: wantKey,
+			wantMetrics: map[string]float64{outcomeContended: 1}, wantLogs: []string{"Skipped contended study reconcile tick", "xid=123"}},
+		{name: "acquire error retried", data: validTick, acquireErr: acquireErr, wantRetry: true, wantErrIs: acquireErr, wantAcquireCalls: 1, wantKey: wantKey,
+			wantMetrics: map[string]float64{outcomeRetryError: 1}, wantLogs: []string{"Failed to acquire study reconcile lock", "xid=123"}},
+		{name: "reconcile error retried", data: validTick, recErr: reconcileErr, wantRetry: true, wantErrIs: reconcileErr, wantAcquireCalls: 1, wantKey: wantKey, wantRec: true,
+			wantMetrics: map[string]float64{outcomeRetryError: 1}, wantLogs: []string{"Failed to process study reconcile tick", "xid=123"}},
+		{name: "release lost lease logs warn", data: validTick, releaseErr: redislock.ErrLeaseLost, wantSuccess: true, wantAcquireCalls: 1, wantKey: wantKey, wantRec: true,
+			wantMetrics: map[string]float64{outcomeReconciled: 1}, wantLogs: []string{"Study reconcile lock lease was already lost before release"}},
+		{name: "release transport error logs warn", data: validTick, releaseErr: acquireErr, wantSuccess: true, wantAcquireCalls: 1, wantKey: wantKey, wantRec: true,
+			wantMetrics: map[string]float64{outcomeReconciled: 1}, wantLogs: []string{"Failed to release study reconcile lock"}},
+		{name: "empty payload", data: "", wantMetrics: map[string]float64{outcomeInvalidPayload: 1}, wantLogs: []string{"Dropping invalid study reconcile tick", "payload_bytes=0"}},
+		{name: "malformed json", data: "not json", wantMetrics: map[string]float64{outcomeInvalidPayload: 1}, wantLogs: []string{"Dropping invalid study reconcile tick", "payload_bytes=8"}},
+		{name: "multibyte invalid xid", data: `{"experiment":"experiments/１２３"}`, wantMetrics: map[string]float64{outcomeInvalidPayload: 1}, wantLogs: []string{"Dropping invalid study reconcile tick"}},
+		{name: "wrong resource", data: `{"experiment":"xids/123"}`, wantMetrics: map[string]float64{outcomeInvalidPayload: 1}, wantLogs: []string{"Dropping invalid study reconcile tick"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lease := &fakeLease{releaseFn: func(context.Context) error { return tc.releaseErr }}
+			locker := &fakeLocker{lease: lease, err: tc.acquireErr}
+			var reconciled bool
+			h, _ := NewHandler(HandlerParams{
+				Locker: locker,
+				Reconcile: func(_ context.Context, xid int64) error {
+					reconciled = xid == 123
+					return tc.recErr
+				},
+			})
+
 			var logs bytes.Buffer
-			ctx := logging.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			before := snapshotOutcomes()
+			got := h.HandleTask(newLogContext(&logs), "worker-1", tc.data)
 
-			got := handleTask(ctx, "worker-1", tc.data)
-
-			if got.WasRunSuccessful != tc.wantSuccess || got.ShouldBeRetried {
-				t.Errorf("handleTask(%q) = %+v, want WasRunSuccessful=%v ShouldBeRetried=false", tc.data, got, tc.wantSuccess)
+			if got.WasRunSuccessful != tc.wantSuccess || got.ShouldBeRetried != tc.wantRetry {
+				t.Errorf("HandleTask() = %+v, want success=%v retry=%v", got, tc.wantSuccess, tc.wantRetry)
 			}
-			if (got.Error == nil) != tc.wantSuccess {
-				t.Errorf("handleTask(%q) error = %v, want error only on failure", tc.data, got.Error)
+			if tc.wantErrIs != nil && !errors.Is(got.Error, tc.wantErrIs) {
+				t.Errorf("error = %v, want %v", got.Error, tc.wantErrIs)
 			}
-			for _, want := range tc.wantLogs {
-				if !strings.Contains(logs.String(), want) {
-					t.Errorf("handleTask(%q) logs = %q, want them to contain %q", tc.data, logs.String(), want)
+			if locker.calls != tc.wantAcquireCalls || locker.lastKey != tc.wantKey || reconciled != tc.wantRec {
+				t.Errorf("calls=%d key=%q rec=%v, want %d %q %v", locker.calls, locker.lastKey, reconciled, tc.wantAcquireCalls, tc.wantKey, tc.wantRec)
+			}
+			if tc.wantRec && (lease.releaseCalls != 1 || !lease.releaseHasDeadline) {
+				t.Errorf("releaseCalls=%d hasDeadline=%v, want 1 bounded Release", lease.releaseCalls, lease.releaseHasDeadline)
+			}
+			if diff := cmp.Diff(tc.wantMetrics, diffOutcomes(before)); diff != "" {
+				t.Errorf("metric deltas mismatch (-want +got):\n%s", diff)
+			}
+			for _, wantLog := range tc.wantLogs {
+				if !strings.Contains(logs.String(), wantLog) {
+					t.Errorf("logs = %q, want %q", logs.String(), wantLog)
 				}
+			}
+		})
+	}
+}
+
+func TestHandleTask_DeadlineAndShutdownTransitions(t *testing.T) {
+	tests := []struct {
+		name             string
+		reconcileTimeout time.Duration
+		ignoreCancel     bool
+		cancelParent     bool
+		wantErrIs        error
+	}{
+		{name: "reconcile timeout deadline", reconcileTimeout: 15 * time.Millisecond, wantErrIs: context.DeadlineExceeded},
+		{name: "reconcile timeout exact boundary when reconcile returns nil", reconcileTimeout: 15 * time.Millisecond,
+			ignoreCancel: true, wantErrIs: context.DeadlineExceeded},
+		{name: "parent shutdown cancels reconcile and releases on detached ctx", cancelParent: true, wantErrIs: context.Canceled},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parentCtx, cancelParent := context.WithCancel(context.Background())
+			defer cancelParent()
+			started := make(chan struct{})
+			if tc.cancelParent {
+				go func() { <-started; cancelParent() }()
+			}
+			lease := &fakeLease{}
+			h, _ := NewHandler(HandlerParams{
+				Locker:           &fakeLocker{lease: lease},
+				ReconcileTimeout: tc.reconcileTimeout,
+				Reconcile: func(ctx context.Context, _ int64) error {
+					close(started)
+					<-ctx.Done()
+					if tc.ignoreCancel {
+						return nil
+					}
+					return ctx.Err()
+				},
+			})
+
+			before := snapshotOutcomes()
+			got := h.HandleTask(parentCtx, "worker-1", `{"experiment":"experiments/14"}`)
+
+			if got.WasRunSuccessful || !got.ShouldBeRetried || !errors.Is(got.Error, tc.wantErrIs) {
+				t.Fatalf("got = %+v, want retryable %v", got, tc.wantErrIs)
+			}
+			if lease.releaseCalls != 1 || lease.releaseCtxErr != nil || !lease.releaseHasDeadline {
+				t.Errorf("releaseCalls=%d ctxErr=%v hasDeadline=%v", lease.releaseCalls, lease.releaseCtxErr, lease.releaseHasDeadline)
+			}
+			if diff := cmp.Diff(map[string]float64{outcomeRetryError: 1}, diffOutcomes(before)); diff != "" {
+				t.Errorf("metric deltas mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
