@@ -160,11 +160,11 @@ def staged_paths_match(diff_filter: str, pattern: str) -> bool:
     return any(regex.search(path) for path in git_staged_paths(diff_filter, no_renames=True))
 
 
-def git_ls_files(pathspecs: Sequence[str]) -> list[str]:
-    """Lists NUL-delimited sorted unique paths from `git ls-files`, exiting 1 if git fails."""
+def git_ls_files(pathspecs: Sequence[str], *, base_dir: Path = REPO_ROOT) -> list[str]:
+    """Lists existing NUL-delimited sorted unique paths from `git ls-files`, exiting 1 on error."""
     res = exec_cmd(
         ["git", "-c", "core.quotePath=false", "ls-files", "-z", "--", *pathspecs],
-        cwd=REPO_ROOT,
+        cwd=base_dir,
         capture=True,
     )
     if res.returncode != 0:
@@ -172,7 +172,7 @@ def git_ls_files(pathspecs: Sequence[str]) -> list[str]:
         if res.stderr:
             print(res.stderr.strip(), file=sys.stderr)
         raise SystemExit(1)
-    return sorted({path for path in res.stdout.split("\0") if path})
+    return sorted({p for p in res.stdout.split("\0") if p and (base_dir / p).is_file()})
 
 
 def walk_repo_files(

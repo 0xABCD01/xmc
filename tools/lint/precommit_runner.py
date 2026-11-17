@@ -232,6 +232,11 @@ def check_mypy(ctx: gates.RunContext) -> None:
         ctx.fail("Mypy type check failed.")
 
 
+_ACTIONLINT_HINT = "Install: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12"
+_SHELLCHECK_HINT = "Install: sudo apt-get install shellcheck (or brew install shellcheck)"
+_SHELLCHECK_EXTRA_DIRS = (Path.home() / ".local/bin",)
+
+
 def check_workflows(ctx: gates.RunContext) -> None:
     """Runs `actionlint` across `.github/workflows`."""
     if ctx.mode == "check" and not gates.git_ls_files(
@@ -243,12 +248,18 @@ def check_workflows(ctx: gates.RunContext) -> None:
     ):
         return
     actionlint = gates.resolve_go_tool(
-        ctx, "actionlint", "actionlint not found. Workflow linting skipped."
+        ctx, "actionlint", "actionlint not found. Workflow linting skipped.", _ACTIONLINT_HINT
     )
     if not actionlint:
         return
+    shellcheck = gates.resolve_binary("shellcheck", _SHELLCHECK_EXTRA_DIRS)
+    cmd = [actionlint, f"-shellcheck={shellcheck}"] if shellcheck else [actionlint]
+    if not shellcheck:
+        ctx.warn_missing(
+            "shellcheck not found. Workflow run-block shellcheck skipped.", _SHELLCHECK_HINT
+        )
     print("--> Running GitHub Actions Workflow Linter (actionlint)...")
-    if gates.exec_cmd([actionlint], cwd=gates.REPO_ROOT).returncode != 0:
+    if gates.exec_cmd(cmd, cwd=gates.REPO_ROOT).returncode != 0:
         ctx.fail("actionlint failed.")
 
 
@@ -260,15 +271,15 @@ def check_shell(ctx: gates.RunContext) -> None:
         files = [p for p in gates.git_staged_paths("ACMR") if p.endswith((".sh", ".bash"))]
     if not files:
         return
-    shellcheck = gates.resolve_binary("shellcheck", (Path.home() / ".local/bin",))
+    shellcheck = gates.resolve_binary("shellcheck", _SHELLCHECK_EXTRA_DIRS)
     if not shellcheck:
-        ctx.warn_missing("shellcheck not found. Shell script linting skipped.")
+        ctx.warn_missing("shellcheck not found. Shell script linting skipped.", _SHELLCHECK_HINT)
         return
     print("--> Running Shell Script Linter (shellcheck)...")
     for batch in gates.chunked(files, 500):
         if (
             gates.exec_cmd(
-                [shellcheck, "-S", "style", "-e", "SC1091", *batch], cwd=gates.REPO_ROOT
+                [shellcheck, "-S", "style", "-e", "SC1091", "--", *batch], cwd=gates.REPO_ROOT
             ).returncode
             != 0
         ):

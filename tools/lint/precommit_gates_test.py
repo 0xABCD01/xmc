@@ -90,12 +90,20 @@ class GitDiscoveryTest(unittest.TestCase):
         self.assertEqual(run_mock.call_args.kwargs["errors"], "surrogateescape")
 
     def test_git_ls_files_dedupes_and_handles_failure(self):
-        ok_proc = subprocess.CompletedProcess([], 0, stdout="b.sh\0a.sh\0b.sh\0\0", stderr="")
-        with mock.patch.object(gates, "exec_cmd", return_value=ok_proc) as run_mock:
-            files = gates.git_ls_files(["*.sh"])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "a.sh").write_text("", encoding="utf-8")
+            (root / "b.sh").write_text("", encoding="utf-8")
+            (root / "dir.sh").mkdir()
+            ok_proc = subprocess.CompletedProcess(
+                [], 0, stdout="b.sh\0a.sh\0b.sh\0deleted.sh\0dir.sh\0\0", stderr=""
+            )
+            with mock.patch.object(gates, "exec_cmd", return_value=ok_proc) as run_mock:
+                files = gates.git_ls_files(["*.sh"], base_dir=root)
         self.assertEqual(files, ["a.sh", "b.sh"])
         self.assertIn("-z", run_mock.call_args.args[0])
-        self.assertEqual(run_mock.call_args.kwargs["cwd"], gates.REPO_ROOT)
+        self.assertIn("core.quotePath=false", run_mock.call_args.args[0])
+        self.assertEqual(run_mock.call_args.kwargs["cwd"], root)
 
         fail_proc = subprocess.CompletedProcess([], 1, stdout="", stderr="bad ls")
         with (

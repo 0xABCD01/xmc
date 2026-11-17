@@ -138,7 +138,7 @@ The workflow builds one combined virtualenv with [`install_xmanager.py`](../../d
 The tool then reads the nightly matrix and runs each check in its own subprocess, with a 30s timeout per check:
 1. **Entrypoint import:** plainly imports the entrypoint module (e.g. `import launch`) with the nightly launch step's working directory, `PYTHONPATH` and `sys.argv[0]`. Each example needs its own subprocess because 12 of the 13 entrypoints share the module name `launch` and absl's flag registry is process-global (two examples define `--queue`).
 2. **Matrix args:** if the entrypoint module defines absl flags, the matrix `args` are parsed against them the way `app.run` would, so a renamed or removed flag, a failed flag validator, or a leftover positional argument fails.
-   - Args are tokenized like nightly's `eval echo`: quotes are removed and words are re-split on whitespace.
+   - Args are tokenized like nightly's `eval "EVAL_ARGS=(${RAW_ARGS})"` array assignment: quotes preserve whitespace inside an argument, and unquoted globs or shell operators (`(`, `)`, `*`, `?`, `[`, `;`, `&`, `|`, `<`, `>`) are rejected.
    - `${QUEUE_NAME}` expands as in nightly. Any other placeholder or shell expansion (`$VAR`, `${VAR:-x}`, `$(...)`) fails.
    - Entrypoints that parse arguments with argparse inside `main()` (`managed_xprof_artifact_job`, `xdash_dashboard`) can't be checked without running `main()`, so they're skipped. So are flags defined in a helper module rather than in the entrypoint itself.
    - Each distinct `(entrypoint, args)` row is checked.
