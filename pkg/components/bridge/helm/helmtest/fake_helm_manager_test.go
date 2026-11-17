@@ -220,3 +220,27 @@ func TestFakeHelmManager_ComponentHealth(t *testing.T) {
 		})
 	}
 }
+
+func TestFakeHelmManager_ProfileDrifted(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewFakeHelmManager()
+	ref := helm.ComponentRef{Namespace: "xmc", Name: "ingestion-gateway"}
+	if mgr.ProfileDrifted(ctx, ref, "stable-2026b") {
+		t.Error("ProfileDrifted() before any Ensure1PComponent = true, want false")
+	}
+	if err := mgr.Ensure1PComponent(ctx, ref, helm.HelmComponentOptions{Ref: ref, Enabled: true, Profile: "stable-2026a"}); err != nil {
+		t.Fatalf("Ensure1PComponent failed: %v", err)
+	}
+	tests := []struct {
+		profile string
+		want    bool
+	}{
+		{profile: "stable-2026a", want: false},
+		{profile: "stable-2026b", want: true},
+	}
+	for _, tc := range tests {
+		if got := mgr.ProfileDrifted(ctx, ref, tc.profile); got != tc.want {
+			t.Errorf("ProfileDrifted(%q) = %v, want %v", tc.profile, got, tc.want)
+		}
+	}
+}

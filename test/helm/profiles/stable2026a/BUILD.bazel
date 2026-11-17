@@ -19,9 +19,13 @@ load("@io_bazel_rules_go//go:def.bzl", "go_test")
 # inside the chart directory that Helm's loader reads.
 go_test(
     name = "stable2026a_test",
-    srcs = ["profile_chart_test.go"],
+    srcs = [
+        "profile_chart_test.go",
+        "profile_digest_test.go",
+    ],
     data = ["//deploy/profiles/stable-2026a:chart"],
     deps = [
+        "//deploy/profiles/stable-2026a:stable2026a",
         "//test/helm/profiles/profilecontract",
         "@com_github_google_go_cmp//cmp",
     ],

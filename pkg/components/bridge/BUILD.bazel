@@ -99,6 +99,7 @@ go_test(
         "dependency_readiness_test.go",
         "intent_generation_test.go",
         "lifecycle_test.go",
+        "profile_actuation_test.go",
         "reconciler_test.go",
         "request_source_retry_test.go",
         "spec_parser_test.go",
@@ -165,6 +166,8 @@ go_test(
         "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//proto",
         "@org_golang_x_oauth2//:oauth2",
+        "@sh_helm_helm_v3//pkg/chart",
+        "@sh_helm_helm_v3//pkg/release",
     ],
 )
 

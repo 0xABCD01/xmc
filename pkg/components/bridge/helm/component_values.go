@@ -32,6 +32,33 @@ const ComponentValuesConfigMapName = "xmc-component-values"
 // componentValuesKeySuffix terminates every component's data key in the release ConfigMap.
 const componentValuesKeySuffix = ".json"
 
+// persistedProfileKey is the top-level key, in a component's stored values JSON only, that records the resolved
+// profile whose embedded chart the release was actuated with. It is never passed to Helm.
+const persistedProfileKey = "xmc.dev/profile"
+
+// withPersistedProfile returns a copy of values that also records profile under persistedProfileKey.
+func withPersistedProfile(values map[string]any, profile string) map[string]any {
+	persisted := make(map[string]any, len(values)+1)
+	for k, v := range values {
+		persisted[k] = v
+	}
+	persisted[persistedProfileKey] = profile
+	return persisted
+}
+
+// extractProfileFromValuesJSON returns the profile stored in a component's values JSON, or DefaultProfile when the
+// values were stored without one (before profiles existed) or cannot be parsed.
+func extractProfileFromValuesJSON(rawJSON string) string {
+	var values map[string]any
+	if err := json.Unmarshal([]byte(rawJSON), &values); err != nil {
+		return DefaultProfile
+	}
+	if profile, ok := values[persistedProfileKey].(string); ok && profile != "" {
+		return profile
+	}
+	return DefaultProfile
+}
+
 // componentValuesKey returns the release ConfigMap data key holding componentName's Helm values JSON.
 func componentValuesKey(componentName string) string {
 	return componentName + componentValuesKeySuffix

@@ -29,19 +29,19 @@ import (
 
 // TestK8sHelmManager_TeardownForgetsState verifies that every teardown drops the actuated generation and records the
 // component as inactive (a tombstone that namespace hydration does not overwrite), while only Delete keeps the chart
-// path override.
+// path override and the recorded profile.
 func TestK8sHelmManager_TeardownForgetsState(t *testing.T) {
 	ref := ComponentRef{Namespace: "xmc", Name: "metrics"}
 	key := componentKey(ref.Namespace, ref.Name)
 	type state struct {
-		Active, Known, Actuated, HasChartPath bool
+		Active, Known, Actuated, HasChartPath, HasProfile bool
 	}
 	tests := []struct {
 		name     string
 		teardown func(context.Context, *K8sHelmManager) error
 		want     state
 	}{
-		{name: "Delete1PComponent", teardown: func(ctx context.Context, m *K8sHelmManager) error { return m.Delete1PComponent(ctx, ref) }, want: state{Known: true, HasChartPath: true}},
+		{name: "Delete1PComponent", teardown: func(ctx context.Context, m *K8sHelmManager) error { return m.Delete1PComponent(ctx, ref) }, want: state{Known: true, HasChartPath: true, HasProfile: true}},
 		{name: "Purge1PComponent", teardown: func(ctx context.Context, m *K8sHelmManager) error { return m.Purge1PComponent(ctx, ref) }, want: state{Known: true}},
 		{name: "Orphan1PComponent", teardown: func(ctx context.Context, m *K8sHelmManager) error { return m.Orphan1PComponent(ctx, ref) }, want: state{Known: true}},
 	}
@@ -64,6 +64,7 @@ func TestK8sHelmManager_TeardownForgetsState(t *testing.T) {
 			got.Active, got.Known = mgr.activeState[key]
 			_, got.Actuated = mgr.actuatedGenerations[key]
 			_, got.HasChartPath = mgr.componentChartPaths[key]
+			_, got.HasProfile = mgr.persistedProfiles[key]
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("state after %s mismatch (-want +got):\n%s", tt.name, diff)
 			}
