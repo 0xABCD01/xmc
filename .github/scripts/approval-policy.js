@@ -113,22 +113,6 @@ function checkAddedCommitsForProtectedFiles(addedCommitShas, execOptions = {}) {
   return false;
 }
 
-/**
- * Pure function: Evaluates whether a synchronized PR should be auto-reapproved.
- * @param {Object} [params={}]
- * @param {boolean} [params.hasPriorApproval]
- * @param {string} [params.approvedSha]
- * @param {string} [params.currentSha]
- * @param {boolean} [params.isAuthorOwner]
- * @param {number} [params.deltaLines] - Total changed lines since last approval, including test files.
- * @param {number} [params.testDeltaLines=0] - Subset of deltaLines in test files; excluded from the owner grace budget only.
- * @param {boolean} [params.isCleanRebase]
- * @param {boolean} [params.hasRemovedCommits=false]
- * @param {boolean} [params.hasProtectedFileChanges=false]
- * @param {boolean} [params.isDismissed=false]
- * @param {number} [params.maxGraceLines=MAX_OWNER_GRACE_LINES]
- * @returns {{ shouldReapprove: boolean, reason: string, trigger: string }}
- */
 function evaluateProtectedFilesDecision({ approvedSha, currentSha, isCleanRebase, hasRemovedCommits, deltaLines }) {
   const isUnchangedRebase = approvedSha !== currentSha && isCleanRebase && !hasRemovedCommits && deltaLines === 0;
   if (isUnchangedRebase) {
@@ -213,6 +197,22 @@ function evaluateDeltaPolicy({ isAuthorOwner, deltaLines, testDeltaLines, isClea
   return evaluateOwnerGrace(deltaLines, testDeltaLines, maxGraceLines);
 }
 
+/**
+ * Pure function: Evaluates whether a synchronized PR should be auto-reapproved.
+ * @param {Object} [params={}]
+ * @param {boolean} [params.hasPriorApproval]
+ * @param {string} [params.approvedSha]
+ * @param {string} [params.currentSha]
+ * @param {boolean} [params.isAuthorOwner]
+ * @param {number} [params.deltaLines] - Total changed lines since last approval, including test files.
+ * @param {number} [params.testDeltaLines=0] - Subset of deltaLines in test files; excluded from the owner grace budget only.
+ * @param {boolean} [params.isCleanRebase]
+ * @param {boolean} [params.hasRemovedCommits=false]
+ * @param {boolean} [params.hasProtectedFileChanges=false]
+ * @param {boolean} [params.isDismissed=false]
+ * @param {number} [params.maxGraceLines=MAX_OWNER_GRACE_LINES]
+ * @returns {{ shouldReapprove: boolean, reason: string, trigger: string }}
+ */
 function evaluateIncrementalApproval({
   hasPriorApproval,
   approvedSha,
