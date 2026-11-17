@@ -13,13 +13,16 @@
 // limitations under the License.
 
 import type {
+  GetSchedulingStatusResponse,
   HealthStatusResponse,
   ListConfigEntriesResponse,
   UserInfoResponse,
 } from 'app/protos/health_service';
 import type {
+  BatchGetQueueSecondaryDataResponse,
   ClusterQueueSecondaryMetrics,
   DashboardJob,
+  GetRunningAndPendingJobsResponse,
   ListClusterQueuesResponse,
 } from 'app/protos/rod';
 import type { ListDashboardsResponse } from 'app/service/dashboard_models';
@@ -125,7 +128,7 @@ export const MOCK_CLUSTER_QUEUES: ListClusterQueuesResponse = {
   ],
 };
 
-export const MOCK_JOBS: DashboardJob[] = [
+const MOCK_JOBS: DashboardJob[] = [
   {
     xid: 10293841,
     workUnitId: 1,
@@ -146,7 +149,7 @@ export const MOCK_JOBS: DashboardJob[] = [
   },
 ];
 
-export const MOCK_PREDICTABILITY_DATA: Record<string, ClusterQueueSecondaryMetrics> = {
+const MOCK_PREDICTABILITY_DATA: Record<string, ClusterQueueSecondaryMetrics> = {
   'gpu-cluster-queue': {
     queuePredictability: [
       {
@@ -181,6 +184,19 @@ export const MOCK_PREDICTABILITY_DATA: Record<string, ClusterQueueSecondaryMetri
       },
     ],
   },
+};
+
+export const MOCK_SCHEDULING_STATUS: GetSchedulingStatusResponse = {
+  isSchedulingPaused: false,
+};
+
+export const MOCK_QUEUE_JOBS_RESPONSE: GetRunningAndPendingJobsResponse = {
+  jobs: MOCK_JOBS,
+  totalQueueSize: MOCK_JOBS.length,
+};
+
+export const MOCK_SECONDARY_DATA_RESPONSE: BatchGetQueueSecondaryDataResponse = {
+  queuePredictability: MOCK_PREDICTABILITY_DATA,
 };
 
 export const MOCK_DASHBOARDS_LIST: ListDashboardsResponse = {
