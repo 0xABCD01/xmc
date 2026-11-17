@@ -126,6 +126,51 @@ A study's work units are its trials, which only the study controller creates. `C
 `STUDY` experiment returns `FAILED_PRECONDITION` without writing anything
 ([`internal/workunit/createworkunit.go`](../../internal/workunit/createworkunit.go)).
 
+#### Creating Trials: `BatchCreateWorkUnits`
+
+The study controller creates trials with `BatchCreateWorkUnits` (AIP-233, `POST
+/v1/{parent=experiments/*}/workUnits:batchCreate`). The request holds 1 to 500 `CreateWorkUnitRequest`s;
+the server assigns the work unit IDs. The response is
+synchronous: the created work units, in request order, with contiguous IDs that follow the
+experiment's largest work unit ID. ESS checks, in order
+([`server/batchcreateworkunits.go`](server/batchcreateworkunits.go)):
+
+| Check | Error |
+| :--- | :--- |
+| The caller is authenticated. | `UNAUTHENTICATED` |
+| `parent` is an experiment name, the request holds 1 to 500 requests, and each request and its `work_unit` are set. The work units are not otherwise validated yet. | `INVALID_ARGUMENT` |
+| The experiment exists. | `NOT_FOUND` |
+| The experiment is a `STUDY`; other types are not supported yet. | `UNIMPLEMENTED` |
+| In the creation transaction, the caller's verified email equals the `hpo` component parameter `studyControllerServiceAccount` (ASCII case-insensitive). XID ACLs are not consulted. A missing `hpo` component or an empty parameter rejects every caller. | `PERMISSION_DENIED` |
+
+ESS then writes all work units in one transaction
+([`internal/workunit/batchcreateworkunits.go`](../../internal/workunit/batchcreateworkunits.go)): it
+checks the caller against the `hpo` component, reads the experiment once, allocates the IDs with a
+single next-ID read, inserts each work unit, and updates the experiment's denormalized
+status and resources once. After the commit it records a creation operation and enqueues the
+creation task of each work unit in turn. If either fails, the RPC returns `INTERNAL` naming that
+work unit at once, and the work units after it are not scheduled. The work units are already
+stored, so the study controller must not create them again when it retries.
+
+##### Trust Boundary
+
+Owning or writing to a study does not let a user create its trials. The experiment creator, like
+every other user, calls with their own identity. The email comes from the Google-signed ID token
+that ESS verifies (the `x-goog-user-email` header is not trusted), so it never matches the
+configured study controller, and the call fails with `PERMISSION_DENIED`. XID ACLs grant nothing
+here.
+
+The check is only as strong as control over the configured identity. These principals can pass it:
+
+| Principal | How |
+| :--- | :--- |
+| Holders of `roles/iam.serviceAccountTokenCreator` on the study controller's Google service account | They can mint ID tokens for it. |
+| Users who can run pods as the `xmc-study-controller` Kubernetes ServiceAccount in the release namespace | Workload Identity hands such pods that service account's tokens. |
+| Users who can edit the `hpo` Component | They can point `parameters.studyControllerServiceAccount` at an identity they control. |
+
+Grant none of these beyond the operators who run XMC. See
+[Securing the Study Controller Identity](../../deploy/profiles/stable-2026b/components/hpo/README.md#securing-the-study-controller-identity).
+
 ---
 
 ## Testing & Verification

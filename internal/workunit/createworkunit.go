@@ -61,11 +61,16 @@ func assignWorkUnitMetadataAndTimestamps(ctx context.Context, tx *storage.Transa
 	}
 	setParentIfNonNil(wu.CurrentWorkUnitExecution.Status.SystemMessage, wu.GetName())
 	setParentIfNonNil(wu.CurrentWorkUnitExecution.Status.UserMessage, wu.GetName())
+	stampNewWorkUnit(wu, now)
+	return wid, nil
+}
 
+// stampNewWorkUnit sets the creation and update timestamps of a new work unit, its current
+// execution, and its status to now.
+func stampNewWorkUnit(wu *essmsgpb.WorkUnit, now time.Time) {
 	wu.CreateTime, wu.UpdateTime = timestamppb.New(now), timestamppb.New(now)
 	wu.CurrentWorkUnitExecution.CreateTime, wu.CurrentWorkUnitExecution.UpdateTime = timestamppb.New(now), timestamppb.New(now)
 	wu.CurrentWorkUnitExecution.Status.UpdateTime, wu.CurrentWorkUnitExecution.Status.StateUpdateTime = timestamppb.New(now), timestamppb.New(now)
-	return wid, nil
 }
 
 // insertWorkUnitAndSyncExperiment inserts the work unit and updates its parent experiment exp,
@@ -77,20 +82,32 @@ func insertWorkUnitAndSyncExperiment(ctx context.Context, tx *storage.Transactio
 	if err := RecordExecutionHistory(ctx, tx, xid, wid, 1, localWU.GetExecutable(), nil, localWU.GetCurrentWorkUnitExecution()); err != nil {
 		return nil, err
 	}
-	creationRes, err := experimentdomain.PrepareWorkUnitCreation(ctx, exp, localWU, now)
-	if err != nil {
-		return nil, fmt.Errorf("failed to prepare experiment status for work unit creation: %w", err)
+	return applyWorkUnitCreations(ctx, tx, exp, []*essmsgpb.WorkUnit{localWU}, now)
+}
+
+// applyWorkUnitCreations folds the creation of wus into the denormalized status and resources of
+// their parent experiment exp in memory, then writes the Experiment row once. It returns the
+// updated experiment.
+func applyWorkUnitCreations(ctx context.Context, tx *storage.Transaction, exp *essmsgpb.Experiment, wus []*essmsgpb.WorkUnit, now time.Time) (*essmsgpb.Experiment, error) {
+	resourcesChanged := false
+	for _, wu := range wus {
+		creationRes, err := experimentdomain.PrepareWorkUnitCreation(ctx, exp, wu, now)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare experiment status for work unit creation: %w", err)
+		}
+		exp = creationRes.Experiment
+		resourcesChanged = resourcesChanged || creationRes.ResourcesChanged
 	}
 	// TODO: Consolidate UpdateExperimentStatus and UpdateExperimentResources into a single mutation write to prevent duplicate row updates for the same Experiments row in Spanner.
-	if err := tx.Experiments.UpdateExperimentStatus(ctx, creationRes.Experiment); err != nil {
+	if err := tx.Experiments.UpdateExperimentStatus(ctx, exp); err != nil {
 		return nil, fmt.Errorf("failed to update experiment status: %w", err)
 	}
-	if creationRes.ResourcesChanged {
-		if err := tx.Experiments.UpdateExperimentResources(ctx, creationRes.Experiment); err != nil {
+	if resourcesChanged {
+		if err := tx.Experiments.UpdateExperimentResources(ctx, exp); err != nil {
 			return nil, fmt.Errorf("failed to update experiment resources: %w", err)
 		}
 	}
-	return creationRes.Experiment, nil
+	return exp, nil
 }
 
 func copyCommittedWorkUnitTimestamps(dst, src *essmsgpb.WorkUnit) {
@@ -112,15 +129,24 @@ func copyCommittedWorkUnitTimestamps(dst, src *essmsgpb.WorkUnit) {
 // fetchWorkUnitParent reads the parent experiment of a single new work unit. It returns
 // ErrStudyWorkUnitCreation for a STUDY, whose trials only the study controller creates.
 func fetchWorkUnitParent(ctx context.Context, tx *storage.Transaction, xid int64) (*essmsgpb.Experiment, error) {
+	exp, err := fetchExperimentInTx(ctx, tx, xid)
+	if err != nil {
+		return nil, err
+	}
+	if exp.GetExperimentType() == essmsgpb.Experiment_STUDY {
+		return nil, fmt.Errorf("experiment %d is a study: %w", xid, ErrStudyWorkUnitCreation)
+	}
+	return exp, nil
+}
+
+// fetchExperimentInTx reads experiment xid within tx and fails when it does not exist.
+func fetchExperimentInTx(ctx context.Context, tx *storage.Transaction, xid int64) (*essmsgpb.Experiment, error) {
 	exp, err := tx.Experiments.FetchExperiment(ctx, xid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch experiment: %w", err)
 	}
 	if exp == nil {
 		return nil, fmt.Errorf("experiment %d not found", xid)
-	}
-	if exp.GetExperimentType() == essmsgpb.Experiment_STUDY {
-		return nil, fmt.Errorf("experiment %d is a study: %w", xid, ErrStudyWorkUnitCreation)
 	}
 	return exp, nil
 }
