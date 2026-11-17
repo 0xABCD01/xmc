@@ -919,7 +919,10 @@ def check_component_profile_status(
         return
     caveat = "it is not released and may change incompatibly before release"
     if profile == installed:
-        log_warning(f"Keeping the installed preview component profile ({profile}); {caveat}.")
+        log_warning(
+            f"Keeping the installed preview component profile ({profile}); {caveat}. "
+            "Pass --profile to switch."
+        )
         return
     if not allow_preview:
         action = f"switch from {installed} to" if installed else "install"
@@ -959,11 +962,22 @@ def select_component_profile(config: DeploymentConfig, namespace: str) -> str:
     installed = _installed_component_profile(namespace) if needs_installed else None
     profile = explicit or installed or DEFAULT_COMPONENT_PROFILE
     if installed and not explicit:
-        log_info(
-            f"Keeping the installed component profile ({installed}); pass --profile to switch."
-        )
+        _log_kept_profile(installed)
     check_component_profile_status(profile, installed, allow_preview=config.allow_preview_profile)
     return profile
+
+
+def _log_kept_profile(installed: str) -> None:
+    """Logs that the installed profile is kept, at WARN when it is not the default profile.
+
+    A kept preview profile is reported by check_component_profile_status instead, so a run
+    logs a single warning for it.
+    """
+    msg = f"Keeping the installed component profile ({installed}); pass --profile to switch."
+    if installed == DEFAULT_COMPONENT_PROFILE:
+        log_info(msg)
+    elif component_profile_status(installed) != PROFILE_STATUS_PREVIEW:
+        log_warning(f"{msg} It is not the default profile ({DEFAULT_COMPONENT_PROFILE}).")
 
 
 def _prepare_profile_switch(

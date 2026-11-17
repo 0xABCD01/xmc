@@ -54,6 +54,7 @@ from tools.common.tool_utils import (
     positive_int_arg,
     run_command,
     run_tool,
+    select_component_profile,
     verify_helm_min_version,
 )
 
@@ -1056,6 +1057,39 @@ class TestComponentProfileAndFlags(unittest.TestCase):
                 deploy_component_profile(replace(self.base_config, component_profile=None))
                 self.assertEqual(mock_run.call_args_list[0][0][0][:2], ["helm", "list"])
                 self.assertTrue(mock_run.call_args[0][0][5].endswith(f"deploy/profiles/{want}"))
+
+    @patch("tools.common.tool_utils.log_warning")
+    @patch("tools.common.tool_utils.log_info")
+    @patch("tools.common.tool_utils.component_profile_status")
+    def test_select_component_profile_logs_kept_profile(
+        self, mock_status: MagicMock, mock_info: MagicMock, mock_warn: MagicMock
+    ) -> None:
+        """Keeping the default logs INFO, a non-default WARN, and a preview one warning only."""
+        cases = {
+            # name: (installed, status of installed, want INFO, want WARN substring or None)
+            "default kept": ("stable-2026a", "stable", True, None),
+            "non-default stable kept": ("stable-2026b", "stable", False, "not the default"),
+            "preview kept": ("stable-2026b", "preview", False, "preview component profile"),
+        }
+        for name, (installed, status, want_info, want_warn) in cases.items():
+            with self.subTest(name):
+                mock_info.reset_mock()
+                mock_warn.reset_mock()
+                mock_status.return_value = status
+                with patch(
+                    "tools.common.tool_utils._installed_component_profile", return_value=installed
+                ):
+                    got = select_component_profile(
+                        replace(self.base_config, component_profile=None), "xmc"
+                    )
+                self.assertEqual(got, installed)
+                self.assertEqual(mock_info.called, want_info)
+                if want_warn is None:
+                    mock_warn.assert_not_called()
+                    continue
+                mock_warn.assert_called_once()
+                self.assertIn(want_warn, mock_warn.call_args[0][0])
+                self.assertIn("--profile", mock_warn.call_args[0][0])
 
     @patch("tools.common.tool_utils.run_command")
     def test_deploy_component_profile_explicit_stable_profile_skips_listing(
