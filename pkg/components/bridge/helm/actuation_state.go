@@ -187,9 +187,9 @@ func (m *K8sHelmManager) retireOtherIncarnationsLocked(ref ComponentRef) {
 }
 
 // ForgetComponent evicts all in-memory state of every incarnation of the namespace/name component, including its
-// namespace-level activation entry and chart path override. The bridge calls it once the Component CR is gone, so
-// state of incarnations whose teardown never ran (ghost incarnations) does not leak. The Helm release and the values
-// ConfigMap are left untouched.
+// namespace-level activation entry, chart path override and cached stored profile. The bridge calls it once the
+// Component CR is gone, so state of incarnations whose teardown never ran (ghost incarnations) does not leak. The Helm
+// release and the values ConfigMap are left untouched.
 func (m *K8sHelmManager) ForgetComponent(namespace, name string) {
 	if m == nil || namespace == "" || name == "" {
 		return
@@ -202,6 +202,7 @@ func (m *K8sHelmManager) ForgetComponent(namespace, name string) {
 	}
 	m.dropIncarnationStateLocked(baseKey)
 	delete(m.componentChartPaths, baseKey)
+	delete(m.persistedProfiles, baseKey)
 }
 
 // incarnationKeysLocked returns the distinct UID-scoped keys with the given namespace/name@ prefix that hold any
@@ -241,8 +242,8 @@ func (m *K8sHelmManager) incarnationKeysLocked(prefix string) []string {
 
 // forgetComponentLocked drops the component's actuation and repair state after a teardown and records both the CR
 // incarnation and the namespace-level entry as inactive, so namespace hydration never re-activates it from the values
-// ConfigMap (Orphan keeps enabled values there). Delete keeps the chart path override (keepInactive); Purge and Orphan
-// drop it. Callers must hold m.mu.
+// ConfigMap (Orphan keeps enabled values there). Delete keeps the chart path override and cached stored profile
+// (keepInactive); Purge and Orphan drop them. Callers must hold m.mu.
 func (m *K8sHelmManager) forgetComponentLocked(ref ComponentRef, keepInactive bool) {
 	key := componentStateKey(ref)
 	baseKey := componentKey(ref.Namespace, ref.Name)
@@ -253,6 +254,7 @@ func (m *K8sHelmManager) forgetComponentLocked(ref ComponentRef, keepInactive bo
 	m.activeState[baseKey] = false
 	if !keepInactive {
 		delete(m.componentChartPaths, baseKey)
+		delete(m.persistedProfiles, baseKey)
 	}
 }
 
@@ -280,7 +282,8 @@ func (m *K8sHelmManager) applyHydratedState(key, baseKey string, observedGenerat
 }
 
 // hydrateNamespaceFromConfigMap records the enablement of every component in the namespace's values ConfigMap that
-// has no in-memory state yet; torn-down components stay recorded as inactive. Callers must pass a non-empty namespace.
+// has no in-memory state yet, and caches each stored profile not cached yet; torn-down components stay recorded as
+// inactive. Callers must pass a non-empty namespace.
 func (m *K8sHelmManager) hydrateNamespaceFromConfigMap(ctx context.Context, namespace string) error {
 	if m.client == nil {
 		return nil
@@ -301,6 +304,9 @@ func (m *K8sHelmManager) hydrateNamespaceFromConfigMap(ctx context.Context, name
 			continue
 		}
 		stateKey := componentKey(namespace, compName)
+		if _, exists := m.persistedProfiles[stateKey]; !exists {
+			m.persistedProfiles[stateKey] = extractProfileFromValuesJSON(rawJSON)
+		}
 		if _, exists := m.activeState[stateKey]; exists {
 			continue
 		}

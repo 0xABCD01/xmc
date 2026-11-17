@@ -58,7 +58,7 @@ Configuration can be supplied via environment variables (mounted from `xmc-bridg
 | :--- | :--- | :--- |
 | `--cms-address` / `CMS_ADDRESS` | `"localhost:50051"` | gRPC endpoint address of the Component Manager Service. |
 | `--namespace` / `NAMESPACE` | `"xmc"` | Target Kubernetes namespace to watch and reconcile Component custom resources. |
-| `--chart-path` / `HELM_CHART_PATH` | `""` | Base directory containing per-component Helm charts (`<base>/components/<name>`, `<base>/<name>`, `<base>/<name>.tgz`) or fallback umbrella chart path (defaults to embedded chart when empty). |
+| `--chart-path` / `HELM_CHART_PATH` | `""` | Base directory containing per-component Helm charts (`<base>/components/<name>`, `<base>/<name>`, `<base>/<name>.tgz`) or fallback umbrella chart path (when empty, the bridge uses the chart it embeds for the Component's `xmc.dev/profile` label; see [Profile-Selected Embedded Charts](../../pkg/components/bridge/README.md)). |
 | `--probe-interval` / `PROBE_INTERVAL` | `5s` | Delay after a successful reconcile pass before the same Component is reconciled again, to observe workload health changes that emit no Component event. |
 | `--probe-timeout` / `PROBE_TIMEOUT` | `2s` | Timeout of one workload health probe. |
 | `--reconcile-timeout` / `RECONCILE_TIMEOUT` | `60s` | Timeout of one Component's reconcile pass (CMS calls, actuation and probing); persisting the pass's status is not bounded by it. |
@@ -68,6 +68,7 @@ Configuration can be supplied via environment variables (mounted from `xmc-bridg
 | `--cluster-name` / `CLUSTER_NAME` | value of `--release-name` | DNS-1123 label identifying this Kubernetes cluster in CMS ownership fence declarations and error metadata. |
 | `--ownership-epoch` / `COMPONENT_OWNERSHIP_EPOCH` | `1` | Monotonic positive integer (`>= 1`) declared to CMS via `DeclareClusterEpoch` to fence stale clusters. The chart sets it from `componentsDeployment.ownershipEpoch`. |
 | `--kubeconfig` / `KUBECONFIG` | `""` | Optional explicit path to kubeconfig file (defaults to in-cluster or `KUBECONFIG` env). |
+| `REDIS_ADDR` (environment only) | `""` | Redis `host:port`, set by the chart from the umbrella `redisAddr`. Passed to every 1P release as `<component>Deployment.redisAddr`, overriding Component parameters and values; omitted when empty, which makes the `hpo` chart fail to render. See [Bridge README](../../pkg/components/bridge/README.md). |
 
 Once elected, `xmc-bridge` invokes `HydrateFromCluster` to restore active 1P component states from the `xmc-component-values` ConfigMap, preventing redundant Helm release revision increments and ensuring post-restart deactivations execute cleanly. It runs concurrently with the first reconciles: each 1P Component also hydrates its own state before its Helm actuation, and a reconcile whose dependency gate runs before any hydration falls back to the Component's `DependenciesReady` and `Ready` conditions, so at worst one pass reports `DependenciesNotReady` instead of `HelmUpgradePending` without touching the workload. A torn-down component stays recorded as inactive, so no namespace hydration re-activates a purged or orphaned component from the ConfigMap.
 
