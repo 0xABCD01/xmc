@@ -544,26 +544,23 @@ function getPrChangedFiles(baseRefOrApprovedSha, approvedShaOrCurrentSha, curren
   }
 
   if (baseRef) {
-    const prDiffOutput = execGit(['diff', '--name-only', `origin/${baseRef}...${headSha}`], opts);
+    const diffOpts = { ...opts, ignoreExitCode: false };
+    const prDiffOutput = execGit(['diff', '--name-only', `origin/${baseRef}...${headSha}`], diffOpts);
     const files = new Set(prDiffOutput.split(/\r?\n/).map(f => f.trim()).filter(Boolean));
 
     if (approvedSha && approvedSha !== headSha) {
-      try {
-        const isAncestor = execGit(['merge-base', '--is-ancestor', approvedSha, headSha], { ...opts, ignoreExitCode: true });
-        if (isAncestor.status === 0) {
-          const followUpDiff = execGit(['diff', '--name-only', approvedSha, headSha], opts);
-          for (const file of followUpDiff.split(/\r?\n/).map(f => f.trim()).filter(Boolean)) {
-            files.add(file);
-          }
+      const isAncestor = execGit(['merge-base', '--is-ancestor', approvedSha, headSha], { ...opts, ignoreExitCode: true });
+      if (isAncestor.status === 0) {
+        const followUpDiff = execGit(['diff', '--name-only', approvedSha, headSha], diffOpts);
+        for (const file of followUpDiff.split(/\r?\n/).map(f => f.trim()).filter(Boolean)) {
+          files.add(file);
         }
-      } catch (_) {
-        /* Skip unreachable commit SHA gracefully when aggregating file paths. */
       }
     }
     return Array.from(files);
   }
 
-  const diffOutput = execGit(['diff', '--name-only', approvedSha, headSha], opts);
+  const diffOutput = execGit(['diff', '--name-only', approvedSha, headSha], { ...opts, ignoreExitCode: false });
   return diffOutput.split(/\r?\n/).map(f => f.trim()).filter(Boolean);
 }
 

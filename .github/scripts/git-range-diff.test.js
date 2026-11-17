@@ -575,6 +575,83 @@ test('getPrChangedFiles returns files from 3-dot diff and includes follow-up com
   }
 });
 
+test('getPrChangedFiles skips follow-up diff when approvedSha is unreachable or non-ancestor', () => {
+  const originalExec = childProcess.execFileSync;
+  let followUpCalled = false;
+  childProcess.execFileSync = (cmd, args) => {
+    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'origin/main...headSha') {
+      return 'file1.go\nfile2.go\n';
+    }
+    if (cmd === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+      const err = new Error('fatal: Not a valid object name approvedSha');
+      err.status = 128;
+      throw err;
+    }
+    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'approvedSha' && args[3] === 'headSha') {
+      followUpCalled = true;
+      return 'file3.go\n';
+    }
+    throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+  };
+
+  try {
+    const files = getPrChangedFiles('main', 'approvedSha', 'headSha');
+    assert.strictEqual(followUpCalled, false);
+    assert.deepStrictEqual(files.sort(), ['file1.go', 'file2.go']);
+  } finally {
+    childProcess.execFileSync = originalExec;
+  }
+});
+
+test('getPrChangedFiles propagates follow-up git diff failures instead of failing open', () => {
+  const originalExec = childProcess.execFileSync;
+  childProcess.execFileSync = (cmd, args) => {
+    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'origin/main...headSha') {
+      return 'file1.go\n';
+    }
+    if (cmd === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+      return '';
+    }
+    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'approvedSha' && args[3] === 'headSha') {
+      const err = new Error('git diff failed: ETIMEDOUT');
+      err.status = 1;
+      throw err;
+    }
+    throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+  };
+
+  try {
+    assert.throws(() => getPrChangedFiles('main', 'approvedSha', 'headSha'), /ETIMEDOUT/);
+  } finally {
+    childProcess.execFileSync = originalExec;
+  }
+});
+
+test('getPrChangedFiles normalizes ignoreExitCode to false for git diff calls', () => {
+  const originalExec = childProcess.execFileSync;
+  childProcess.execFileSync = (cmd, args) => {
+    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'origin/main...headSha') {
+      return 'file1.go\n';
+    }
+    if (cmd === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+      return '';
+    }
+    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'approvedSha' && args[3] === 'headSha') {
+      return 'file2.go\n';
+    }
+    throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+  };
+
+  try {
+    const threeDotFiles = getPrChangedFiles('main', 'approvedSha', 'headSha', { ignoreExitCode: true });
+    assert.deepStrictEqual(threeDotFiles.sort(), ['file1.go', 'file2.go']);
+    const twoDotFiles = getPrChangedFiles('approvedSha', 'headSha', { ignoreExitCode: true });
+    assert.deepStrictEqual(twoDotFiles, ['file2.go']);
+  } finally {
+    childProcess.execFileSync = originalExec;
+  }
+});
+
 test('getCommitModifiedFiles returns file list for commit from diff-tree', () => {
   const originalExec = childProcess.execFileSync;
   childProcess.execFileSync = (cmd, args) => {

@@ -76,6 +76,10 @@ const BASE_RULES = {
   'valid-typeof': 'error',
   eqeqeq: ['error', 'always'],
   complexity: ['error', 15],
+  'max-lines-per-function': [
+    'error',
+    { max: 80, skipBlankLines: true, skipComments: true },
+  ],
 };
 
 export default [
@@ -101,17 +105,6 @@ export default [
     },
     rules: {
       ...BASE_RULES,
-      'max-lines-per-function': [
-        'error',
-        { max: 80, skipBlankLines: true, skipComments: true },
-      ],
-    },
-  },
-  {
-    files: ['**/*.test.js', '**/*_test.js'],
-    rules: {
-      'max-lines-per-function': 'off',
-      complexity: 'off',
     },
   },
   {
@@ -131,6 +124,13 @@ export default [
     },
     rules: {
       ...BASE_RULES,
+    },
+  },
+  {
+    files: ['**/*.test.js', '**/*_test.js'],
+    rules: {
+      'max-lines-per-function': 'off',
+      complexity: 'off',
     },
   },
 ];

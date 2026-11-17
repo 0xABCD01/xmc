@@ -73,9 +73,9 @@ jobs:
               - '.github/workflows/nightly-examples-e2e.yml'
               - '.github/workflows/lint.yml'
             nonui_js:
-              - '.github/scripts/*.js'
-              - 'tools/nightly_tests/*.js'
-              - 'cmd/experiment_state_server/static/*.js'
+              - '.github/scripts/**/*.js'
+              - 'tools/nightly_tests/**/*.js'
+              - 'cmd/experiment_state_server/static/**/*.js'
               - 'tools/lint/eslint.nonui.config.mjs'
               - 'cmd/ui/package-lock.json'
               - '.github/workflows/lint.yml'
@@ -249,7 +249,7 @@ jobs:
 
       # 3. UI Linting & Formatting (Prettier & ESLint)
       - name: 'Set up Node.js'
-        if: steps.changes.outputs.ui == 'true' || steps.changes.outputs.nonui_js == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.ui == 'true' || steps.changes.outputs.nonui_js == 'true'
         uses: 'actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a' # v4.2.0
         with:
           node-version: '22'
@@ -257,7 +257,7 @@ jobs:
           cache-dependency-path: 'cmd/ui/package-lock.json'
 
       - name: 'Install UI Dependencies'
-        if: steps.changes.outputs.ui == 'true' || steps.changes.outputs.nonui_js == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.ui == 'true' || steps.changes.outputs.nonui_js == 'true'
         run: npm ci --prefer-offline --no-audit
         working-directory: 'cmd/ui'
 
@@ -272,10 +272,15 @@ jobs:
         working-directory: 'cmd/ui'
 
       - name: 'Run ESLint on Non-UI JS Scripts'
-        if: steps.changes.outputs.nonui_js == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.nonui_js == 'true'
         run: |
-          ./cmd/ui/node_modules/.bin/eslint --no-config-lookup -c tools/lint/eslint.nonui.config.mjs \
-            .github/scripts/*.js tools/nightly_tests/*.js cmd/experiment_state_server/static/*.js
+          mapfile -d '' -t NONUI_JS_FILES < <(git -c core.quotePath=false ls-files -z -- \
+            ':(glob).github/scripts/**/*.js' \
+            ':(glob)tools/nightly_tests/**/*.js' \
+            ':(glob)cmd/experiment_state_server/static/**/*.js')
+          if [ "${#NONUI_JS_FILES[@]}" -gt 0 ]; then
+            ./cmd/ui/node_modules/.bin/eslint --no-config-lookup -c tools/lint/eslint.nonui.config.mjs -- "${NONUI_JS_FILES[@]}"
+          fi
 
       # 3a. GitHub Actions & Nightly JS Script Tests (node:test, no dependencies)
       - name: 'Set up Node.js for JS Script Tests'

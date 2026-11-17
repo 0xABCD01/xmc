@@ -91,6 +91,7 @@ Offline syntax walkers and static validation tooling:
 - [`precommit_gates.py`](lint/precommit_gates.py): Declarative runner (`--mode fix|check`) and shared git/execution primitives for pre-commit Python lint gates (`check_legacy_imports`, `check_examples_coverage`, `check_matrix_contract`, `check_agent_doc_paths`, `check_file_naming`, `check_ui_selector_contract`).
 - [`precommit_deploy_checks.py`](lint/precommit_deploy_checks.py): Pre-commit infrastructure, Helm, and Trivy security gate runner (`--mode fix|check`) covering `deploy/` and `test/helm/`.
 - [`precommit_runner.py`](lint/precommit_runner.py): Top-level pure-stdlib Python orchestrator invoked by `.githooks/pre-commit` for language, UI, deploy, and affected-test gates.
+- [`eslint.nonui.config.mjs`](lint/eslint.nonui.config.mjs): ESLint 10 flat configuration enforcing baseline JS correctness (`no-empty`, `no-unused-vars`, `eqeqeq`, `complexity: 15`, `max-lines-per-function: 80`) recursively across `.github/scripts/**/*.js`, `tools/nightly_tests/**/*.js`, and `cmd/experiment_state_server/static/**/*.js`; invoked by `precommit_runner.py` (`check_nonui_js`) and `.github/workflows/lint.yml`.
 
 ### 8. [`tools/migrations/components/`](migrations/components/README.md) (One-Time Component Cutover)
 Temporary migration side script (`migrate.py`) for transitioning existing umbrella-managed metrics deployments to the `stable-2026a` Component profile (`prepare`, `handoff [--undo]`, `finalize`). See [`docs/migrations/components.md`](../docs/migrations/components.md).

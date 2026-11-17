@@ -402,8 +402,12 @@ class LanguageChecksTest(unittest.TestCase):
     def test_check_nonui_js(self):
         ctx_cfg = gates.RunContext(mode="fix")
         with (
-            mock.patch.object(gates, "staged_paths_match", return_value=True),
-            mock.patch.object(gates, "git_ls_files", return_value=[".github/scripts/a.js"]),
+            mock.patch.object(
+                gates, "git_staged_paths", return_value=["tools/lint/eslint.nonui.config.mjs"]
+            ),
+            mock.patch.object(
+                gates, "git_ls_files", return_value=[".github/scripts/a.js"]
+            ) as cfg_ls,
             mock.patch.object(gates, "resolve_ui_binary", return_value="eslint"),
             mock.patch.object(
                 gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
@@ -412,6 +416,8 @@ class LanguageChecksTest(unittest.TestCase):
         ):
             runner.check_nonui_js(ctx_cfg)
         self.assertFalse(ctx_cfg.failed)
+        cfg_ls.assert_called_once_with(runner._NONUI_JS_GLOBS)
+        self.assertEqual(exec_mock.call_args.kwargs["cwd"], gates.REPO_ROOT)
         self.assertEqual(
             exec_mock.call_args.args[0],
             [
@@ -426,7 +432,9 @@ class LanguageChecksTest(unittest.TestCase):
 
         ctx_chk = gates.RunContext(mode="check")
         with (
-            mock.patch.object(gates, "git_ls_files", return_value=[".github/scripts/a.js"]),
+            mock.patch.object(
+                gates, "git_ls_files", return_value=[".github/scripts/a.js"]
+            ) as chk_ls,
             mock.patch.object(gates, "resolve_ui_binary", return_value="eslint"),
             mock.patch.object(
                 gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
@@ -435,6 +443,8 @@ class LanguageChecksTest(unittest.TestCase):
         ):
             runner.check_nonui_js(ctx_chk)
         self.assertFalse(ctx_chk.failed)
+        chk_ls.assert_called_once_with(runner._NONUI_JS_GLOBS)
+        self.assertEqual(chk_exec.call_args.kwargs["cwd"], gates.REPO_ROOT)
         self.assertEqual(
             chk_exec.call_args.args[0],
             [
@@ -447,19 +457,70 @@ class LanguageChecksTest(unittest.TestCase):
         )
 
         ctx_fail = gates.RunContext(mode="fix")
+        staged_paths = [
+            ".github/scripts/a.js",
+            "tools/nightly_tests/sub/b.js",
+            "cmd/experiment_state_server/static/c.js",
+            "cmd/ui/b.js",
+        ]
         with (
-            mock.patch.object(gates, "staged_paths_match", return_value=False),
-            mock.patch.object(
-                gates, "git_staged_paths", return_value=[".github/scripts/a.js", "cmd/ui/b.js"]
-            ),
+            mock.patch.object(gates, "git_staged_paths", return_value=staged_paths),
             mock.patch.object(gates, "resolve_ui_binary", return_value="eslint"),
             mock.patch.object(
                 gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
-            ),
+            ) as fail_exec,
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
             runner.check_nonui_js(ctx_fail)
         self.assertTrue(ctx_fail.failed)
+        self.assertEqual(fail_exec.call_args.kwargs["cwd"], gates.REPO_ROOT)
+        self.assertEqual(
+            fail_exec.call_args.args[0],
+            [
+                "eslint",
+                "--no-config-lookup",
+                "-c",
+                "tools/lint/eslint.nonui.config.mjs",
+                "--fix",
+                ".github/scripts/a.js",
+                "tools/nightly_tests/sub/b.js",
+                "cmd/experiment_state_server/static/c.js",
+            ],
+        )
+
+    def test_check_nonui_js_skips_and_missing_binary(self):
+        ctx_skip = gates.RunContext(mode="fix")
+        with (
+            mock.patch.object(gates, "git_staged_paths", return_value=["cmd/ui/b.js", "README.md"]),
+            mock.patch.object(gates, "resolve_ui_binary") as skip_resolve,
+            mock.patch.object(gates, "exec_cmd") as skip_exec,
+        ):
+            runner.check_nonui_js(ctx_skip)
+        self.assertFalse(ctx_skip.failed)
+        skip_resolve.assert_not_called()
+        skip_exec.assert_not_called()
+
+        ctx_missing_chk = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "git_ls_files", return_value=[".github/scripts/a.js"]),
+            mock.patch.object(gates.shutil, "which", return_value=None),
+            mock.patch.object(gates, "exec_cmd") as missing_chk_exec,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_nonui_js(ctx_missing_chk)
+        self.assertTrue(ctx_missing_chk.failed)
+        missing_chk_exec.assert_not_called()
+
+        ctx_missing_fix = gates.RunContext(mode="fix")
+        with (
+            mock.patch.object(gates, "git_staged_paths", return_value=[".github/scripts/a.js"]),
+            mock.patch.object(gates.shutil, "which", return_value=None),
+            mock.patch.object(gates, "exec_cmd") as missing_fix_exec,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_nonui_js(ctx_missing_fix)
+        self.assertFalse(ctx_missing_fix.failed)
+        missing_fix_exec.assert_not_called()
 
 
 class OrchestrationAndMainTest(unittest.TestCase):

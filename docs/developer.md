@@ -255,7 +255,7 @@ Go source files (`.go`) are formatted using standard **`gofmt`**:
 ### 3. UI Code (`prettier` & `eslint`)
 Angular and TypeScript frontend code under `cmd/ui` is formatted and linted using **Prettier** and **ESLint**:
 * **`prettier`**: Enforces consistent styling on `.ts`, `.html`, and `.scss` files (`npm run format:check`).
-* **`eslint`**: Enforces Angular best practices, import sorting, and TypeScript strictness (`npm run lint`).
+* **`eslint`**: Enforces Angular best practices, import sorting, and TypeScript strictness under `cmd/ui` (`npm run lint`). Non-UI `.js` scripts use the separate config documented in section 8.
 
 ### 4. Bazel Build Files (`buildifier`)
 Bazel build graphs (`BUILD`, `BUILD.bazel`, `WORKSPACE`, `MODULE.bazel`, and `.bzl` files) are formatted and analyzed using **`buildifier`**:
@@ -277,10 +277,11 @@ Tracked UI templates, UI test specs, and GitHub Actions script tests are checked
 * Enforces `*.ng.html` for HTML files under `cmd/ui/` (requiring templates under `cmd/ui/app/` and allowing root `cmd/ui/index.html`), `*_test.ts` Karma unit test specs under `cmd/ui/app/` (rejecting `*.spec.ts`, `*_spec.ts`, and `*.test.ts` repo-wide outside `cmd/ui/screenshot_tests/`), `*.screenshot.spec.ts` Playwright specs under `cmd/ui/screenshot_tests/`, and top-level `*.test.js` Node workflow script tests under `.github/scripts/`.
 * Prevents misnamed test specs (such as `foo.spec.ts` or `.github/scripts/foo_test.js`) from silently compiling without executing in Karma or CI; runs in both the pre-commit hook and CI.
 
-### 8. GitHub Actions Workflows & Shell Scripts (`actionlint` & `shellcheck`)
-Workflows and tracked shell scripts are validated in CI ([`.github/workflows/lint.yml`](../.github/workflows/lint.yml)) and locally in `.githooks/pre-commit`:
+### 8. GitHub Actions Workflows, Shell Scripts & Non-UI JS (`actionlint`, `shellcheck`, `eslint`)
+Workflows, tracked shell scripts, and non-UI JavaScript scripts are validated in CI ([`.github/workflows/lint.yml`](../.github/workflows/lint.yml)) and locally in `.githooks/pre-commit`:
 * **`actionlint`**: Validates `.github/workflows/*.{yml,yaml}` and integrates `shellcheck` across workflow `run:` blocks.
 * **`shellcheck`**: Validates tracked `*.sh` and `*.bash` scripts with `shellcheck -S style -e SC1091`.
+* **Non-UI JS ESLint**: Runs `./cmd/ui/node_modules/.bin/eslint --no-config-lookup -c tools/lint/eslint.nonui.config.mjs` recursively across `.github/scripts/**/*.js`, `tools/nightly_tests/**/*.js`, and `cmd/experiment_state_server/static/**/*.js` via [`tools/lint/eslint.nonui.config.mjs`](../tools/lint/eslint.nonui.config.mjs) (reusing the ESLint installation in `cmd/ui`).
 * **Node JS Script Tests**: Runs `node --test .github/scripts/*.test.js` and `node --test tools/nightly_tests/*_test.js` in CI when workflow scripts or nightly test utilities change.
 
 ---
@@ -295,7 +296,7 @@ Developers can run the pre-commit hook locally in two modes:
   ```
   Automatically formats files and adds missing headers. Formatter fixes to files that were fully staged before the hook ran are restaged automatically ([`tools/lint/precommit_autostage.py`](../tools/lint/precommit_autostage.py)); fixes to partially staged, unstaged, or unrelated files fail the hook so you can review and stage them. Set `XMC_PRECOMMIT_NO_AUTOSTAGE=1` to disable auto-restaging. Affected Bazel unit tests are skipped when every staged path is Markdown or under `docs/`. Which checks run depends on what is staged:
   * **Per-file linters and formatters** (Ruff, Prettier, ESLint, `terraform fmt`, `addlicense`) only process staged files.
-  * **Cross-file checks** (mypy, TFLint, `helm lint`, Trivy) also run when a staged delete or rename removes a file they cover. mypy also runs when `pyproject.toml` or a `.gitignore` changes, and TFLint when `.tflint.hcl` changes. The agent doc path check runs on any staged delete or rename.
+  * **Cross-file checks** (mypy, TFLint, `helm lint`, Trivy) also run when a staged delete or rename removes a file they cover. mypy also runs when `pyproject.toml` or a `.gitignore` changes, and TFLint when `.tflint.hcl` changes. The agent doc path check runs on any staged delete or rename. Staging `tools/lint/eslint.nonui.config.mjs` triggers a full non-UI JS ESLint run across tracked `.github/scripts/**/*.js`, `tools/nightly_tests/**/*.js`, and `cmd/experiment_state_server/static/**/*.js` files (in `fix` mode, a missing `cmd/ui/node_modules` warns and skips, while `--check` fails closed).
   * **mypy** runs bare `mypy`, so `[tool.mypy]` in `pyproject.toml` is the single source of truth for the checked files in CI and in both hook modes. It checks every Python file in the repository, so new directories are covered automatically and edits that break unchanged importers fail locally. Two lists deny files: `.gitignore` (`exclude_gitignore`, mypy 1.16 or later) skips local-only directories such as virtualenvs, Bazel output and the `cluster-toolkit` clone, and `exclude` skips tracked files. Untracked `.py` files that `.gitignore` does not cover are checked too, so remove or fix stray scratch files before committing.
 
 * **Check-only mode (mirrors CI validation)**:
