@@ -74,7 +74,7 @@ The Study Controller connects to the XMC Redis server:
 
 The Study Controller consumes the `xmc-study-reconcile-stream` Redis stream as the `study-controller-group` consumer group, sharing a single Redis connection pool across stream consumption, per-study locking, and `/readyz`. Each message is a protojson `StudyReconcilePayload` (`{"experiment": "experiments/{xid}"}`) that names a study; ticks are unsigned hints, delivered at least once.
 
-Each delivered tick is classified by outcome (`xmc_study_controller_reconcile_ticks_total{outcome}`); for valid payloads, the controller acquires a distributed per-study lease at `xmc:study-reconcile-lock:{xid}` (`SET ... NX PX` with a random 16-byte token, 15s lease TTL up to a 60s reconcile timeout, and token-checked Lua `DEL`):
+Each delivered tick is classified by outcome (`xmc_study_controller_reconcile_ticks_total{outcome}`); for valid payloads, the controller acquires an advisory distributed per-study lease at `xmc:study-reconcile-lock:{xid}` (`SET ... NX PX` with a random 16-byte token, 70s lease TTL exceeding the 60s reconcile timeout, and token-checked Lua `DEL`):
 
 - **Acquired (`reconciled`)**: reconciles the study (currently a stub), releases the lease, logs `Processed study reconcile tick` at info level with the study's XID, and acknowledges the tick.
 - **Already held (`contended`)**: logs `Skipped contended study reconcile tick` at info level and acknowledges the tick without reconciling so multi-replica deployments never reconcile the same study concurrently.

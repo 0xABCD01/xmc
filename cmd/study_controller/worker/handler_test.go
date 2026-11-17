@@ -77,9 +77,11 @@ type stubLockClient struct {
 	redisclient.Client
 	redis.Scripter
 	setErr error
+	gotTTL time.Duration
 }
 
-func (s *stubLockClient) SetArgs(_ context.Context, _ string, _ any, _ redis.SetArgs) *redis.StatusCmd {
+func (s *stubLockClient) SetArgs(_ context.Context, _ string, _ any, a redis.SetArgs) *redis.StatusCmd {
+	s.gotTTL = a.TTL
 	if s.setErr != nil {
 		return redis.NewStatusResult("", s.setErr)
 	}
@@ -149,10 +151,14 @@ func TestNewHandler_ValidationAndRedisWiring(t *testing.T) {
 
 	okConsumer := NewRedisConsumer("127.0.0.1:6379")
 	_ = okConsumer.Close(context.Background())
-	okConsumer.Client = &stubLockClient{}
+	okClient := &stubLockClient{}
+	okConsumer.Client = okClient
 	h, err := NewRedisHandler(okConsumer)
 	if err != nil || !h.HandleTask(context.Background(), "w", `{"experiment":"experiments/55"}`).WasRunSuccessful {
 		t.Fatalf("NewRedisHandler(ok) err = %v or HandleTask failed", err)
+	}
+	if okClient.gotTTL <= h.reconcileTimeout || okClient.gotTTL != defaultLeaseTTL {
+		t.Fatalf("lease TTL = %v, want %v (> reconcileTimeout %v)", okClient.gotTTL, defaultLeaseTTL, h.reconcileTimeout)
 	}
 	okConsumer.Client = &stubLockClient{setErr: redis.Nil}
 	hContended, err := NewRedisHandler(okConsumer)

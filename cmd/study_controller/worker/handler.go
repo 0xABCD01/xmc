@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	defaultLeaseTTL         = 15 * time.Second
+	defaultLeaseTTL         = 70 * time.Second
 	defaultReconcileTimeout = 60 * time.Second
 	defaultReleaseTimeout   = 2 * time.Second
 	studyLockKeyPrefix      = "xmc:study-reconcile-lock:"
