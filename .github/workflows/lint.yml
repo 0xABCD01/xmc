@@ -278,6 +278,7 @@ jobs:
             ':(glob).github/scripts/**/*.js' \
             ':(glob)tools/nightly_tests/**/*.js' \
             ':(glob)cmd/experiment_state_server/static/**/*.js')
+          wait "$!"
           if [ "${#NONUI_JS_FILES[@]}" -gt 0 ]; then
             ./cmd/ui/node_modules/.bin/eslint --no-config-lookup -c tools/lint/eslint.nonui.config.mjs -- "${NONUI_JS_FILES[@]}"
           fi

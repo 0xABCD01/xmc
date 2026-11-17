@@ -555,13 +555,13 @@ test('buildGitEnv constructs non-interactive environment and basic auth header',
 test('getPrChangedFiles returns files from 3-dot diff and includes follow-up commits if ancestor', () => {
   const originalExec = childProcess.execFileSync;
   childProcess.execFileSync = (cmd, args) => {
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'origin/main...headSha') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'origin/main...headSha') {
       return 'file1.go\nfile2.go\n';
     }
     if (cmd === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
       return '';
     }
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'approvedSha' && args[3] === 'headSha') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'approvedSha' && args[4] === 'headSha') {
       return 'file2.go\nfile3.go\n';
     }
     throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
@@ -579,7 +579,7 @@ test('getPrChangedFiles skips follow-up diff when approvedSha is unreachable or 
   const originalExec = childProcess.execFileSync;
   let followUpCalled = false;
   childProcess.execFileSync = (cmd, args) => {
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'origin/main...headSha') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'origin/main...headSha') {
       return 'file1.go\nfile2.go\n';
     }
     if (cmd === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
@@ -587,7 +587,7 @@ test('getPrChangedFiles skips follow-up diff when approvedSha is unreachable or 
       err.status = 128;
       throw err;
     }
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'approvedSha' && args[3] === 'headSha') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'approvedSha' && args[4] === 'headSha') {
       followUpCalled = true;
       return 'file3.go\n';
     }
@@ -606,13 +606,13 @@ test('getPrChangedFiles skips follow-up diff when approvedSha is unreachable or 
 test('getPrChangedFiles propagates follow-up git diff failures instead of failing open', () => {
   const originalExec = childProcess.execFileSync;
   childProcess.execFileSync = (cmd, args) => {
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'origin/main...headSha') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'origin/main...headSha') {
       return 'file1.go\n';
     }
     if (cmd === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
       return '';
     }
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'approvedSha' && args[3] === 'headSha') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'approvedSha' && args[4] === 'headSha') {
       const err = new Error('git diff failed: ETIMEDOUT');
       err.status = 1;
       throw err;
@@ -630,13 +630,13 @@ test('getPrChangedFiles propagates follow-up git diff failures instead of failin
 test('getPrChangedFiles normalizes ignoreExitCode to false for git diff calls', () => {
   const originalExec = childProcess.execFileSync;
   childProcess.execFileSync = (cmd, args) => {
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'origin/main...headSha') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'origin/main...headSha') {
       return 'file1.go\n';
     }
     if (cmd === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
       return '';
     }
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'approvedSha' && args[3] === 'headSha') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'approvedSha' && args[4] === 'headSha') {
       return 'file2.go\n';
     }
     throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
@@ -647,6 +647,35 @@ test('getPrChangedFiles normalizes ignoreExitCode to false for git diff calls', 
     assert.deepStrictEqual(threeDotFiles.sort(), ['file1.go', 'file2.go']);
     const twoDotFiles = getPrChangedFiles('approvedSha', 'headSha', { ignoreExitCode: true });
     assert.deepStrictEqual(twoDotFiles, ['file2.go']);
+  } finally {
+    childProcess.execFileSync = originalExec;
+  }
+});
+
+test('getPrChangedFiles passes --no-renames across 3-dot, follow-up, and 2-dot git diff calls', () => {
+  const originalExec = childProcess.execFileSync;
+  const diffArgs = [];
+  childProcess.execFileSync = (cmd, args) => {
+    if (cmd === 'git' && args[0] === 'diff') {
+      diffArgs.push(args);
+      return '.github/workflows/lint.yml\ndocs/lint.yml.bak\n';
+    }
+    if (cmd === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+      return '';
+    }
+    throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+  };
+
+  try {
+    const threeDot = getPrChangedFiles('main', 'approvedSha', 'headSha');
+    const twoDot = getPrChangedFiles('approvedSha', 'headSha');
+    assert.deepStrictEqual(threeDot, ['.github/workflows/lint.yml', 'docs/lint.yml.bak']);
+    assert.deepStrictEqual(twoDot, ['.github/workflows/lint.yml', 'docs/lint.yml.bak']);
+    assert.deepStrictEqual(diffArgs, [
+      ['diff', '--name-only', '--no-renames', 'origin/main...headSha'],
+      ['diff', '--name-only', '--no-renames', 'approvedSha', 'headSha'],
+      ['diff', '--name-only', '--no-renames', 'approvedSha', 'headSha']
+    ]);
   } finally {
     childProcess.execFileSync = originalExec;
   }
