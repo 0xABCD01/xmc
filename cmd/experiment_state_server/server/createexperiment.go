@@ -99,19 +99,7 @@ func (h *ExperimentHandler) CreateExperiment(ctx context.Context, req *msgpb.Cre
 
 	// 4. Assemble the experiment object.
 	logging.Info(ctx, "Assembling experiment object")
-	newExp := &msgpb.Experiment{
-		Name:           name,
-		Title:          exp.Title,
-		Creator:        creator,
-		Status:         newExperimentStatus(name),
-		Priority:       exp.Priority,
-		Urls:           exp.GetUrls(),
-		Tags:           exp.GetTags(),
-		Notes:          exp.GetNotes(),
-		Resources:      []*msgpb.ResourceSet{},
-		ExperimentType: normalizeExperimentType(exp.GetExperimentType()),
-		TypeConfig:     exp.GetTypeConfig(),
-	}
+	newExp := assembleNewExperiment(name, creator, exp)
 
 	// 5. Persist the experiment to the storage layer.
 	logging.Info(ctx, "Persisting experiment", "experiment_name", newExp.Name)
@@ -124,9 +112,30 @@ func (h *ExperimentHandler) CreateExperiment(ctx context.Context, req *msgpb.Cre
 	// 5.1. Set the experiment's ACLs to the XIDEntry's ACLs.
 	retExp.Acls = xidEntry.Acls
 
+	// 5.2. Enqueue the initial reconcile tick of a STUDY for the Study Controller.
+	h.enqueueStudyReconcile(ctx, retExp)
+
 	// 6. Return the successful response.
 	logging.Info(ctx, "Successfully created experiment", "experiment_name", retExp.GetName())
 	return retExp, nil
+}
+
+// assembleNewExperiment builds the experiment to persist under name from the requested exp, with an
+// initial status, no resources and a normalized experiment type.
+func assembleNewExperiment(name, creator string, exp *msgpb.Experiment) *msgpb.Experiment {
+	return &msgpb.Experiment{
+		Name:           name,
+		Title:          exp.Title,
+		Creator:        creator,
+		Status:         newExperimentStatus(name),
+		Priority:       exp.Priority,
+		Urls:           exp.GetUrls(),
+		Tags:           exp.GetTags(),
+		Notes:          exp.GetNotes(),
+		Resources:      []*msgpb.ResourceSet{},
+		ExperimentType: normalizeExperimentType(exp.GetExperimentType()),
+		TypeConfig:     exp.GetTypeConfig(),
+	}
 }
 
 // normalizeExperimentType maps UNSPECIFIED to STANDARD so that the server never stores UNSPECIFIED.
