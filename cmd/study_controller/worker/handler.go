@@ -170,8 +170,8 @@ func (h *Handler) HandleTask(ctx context.Context, workerID, data string) rediscl
 
 func (h *Handler) reconcileWithLease(ctx context.Context, workerID string, xid int64, lease Lease) error {
 	reconcileCtx, cancel := context.WithTimeout(ctx, h.reconcileTimeout)
-	defer cancel()
 	defer h.releaseLease(ctx, workerID, lease)
+	defer cancel()
 	if err := h.reconcile(reconcileCtx, xid); err != nil {
 		return err
 	}
