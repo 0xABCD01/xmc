@@ -853,6 +853,39 @@ class TestComponentProfileAndFlags(unittest.TestCase):
         self.assertTrue(Path(cmd[5], "Chart.yaml").is_file())
 
     @patch("tools.common.tool_utils.run_command")
+    def test_deploy_component_profile_keeps_components_of_selected_catalog(
+        self, mock_run: MagicMock
+    ) -> None:
+        """Upgrading an installed stable-2026b keeps the CRs and values of its vizier and hpo."""
+        stored_values = json.dumps(
+            {"components": {"vizier": {"enabled": False}, "hpo": {"enabled": False}}}
+        )
+        cluster_list = json.dumps(
+            {
+                "items": [
+                    {
+                        "metadata": {
+                            "name": "vizier",
+                            "annotations": {"meta.helm.sh/release-name": "xmc-profile"},
+                        },
+                        "spec": {"enabled": False, "deletionProtection": True},
+                    }
+                ]
+            }
+        )
+        mock_run.side_effect = [
+            _helm_list("stable-2026b"),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=cluster_list, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=stored_values, stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+        ]
+        deploy_component_profile(replace(self.base_config, component_profile="stable-2026b"))
+        self.assertEqual(mock_run.call_count, 4)
+        upgrade_cmd = mock_run.call_args[0][0]
+        self.assertEqual(upgrade_cmd[3], "--reset-then-reuse-values")
+        self.assertTrue(upgrade_cmd[5].endswith("deploy/profiles/stable-2026b"))
+
+    @patch("tools.common.tool_utils.run_command")
     def test_deploy_component_profile_unknown_profile(self, mock_run: MagicMock) -> None:
         """An unknown profile is rejected before any command runs."""
         with self.assertRaisesRegex(ValueError, "stable-2099z"):

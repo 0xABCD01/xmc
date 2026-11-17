@@ -8,7 +8,8 @@
 
 This directory runs upstream [Open Source Vizier](https://github.com/google/vizier)'s
 `DefaultVizierServer` (`google-vizier==0.1.24`) on port 7077 so that KinD tests and GKE dev
-environments have an endpoint for the experimental `vizier` wrapper component.
+environments have an endpoint for the experimental `vizier` wrapper component of the
+[`stable-2026b` profile](../../../../deploy/profiles/stable-2026b/README.md).
 
 | File | Purpose |
 | :--- | :--- |
@@ -48,8 +49,8 @@ kubectl set image -n xmc deployment/vizier vizier="${IMAGE}"
 
 ## Register the `vizier` Component
 
-When testing against a profile that includes the experimental `vizier` wrapper component, configure
-it with the fixture's endpoint:
+Enable the component in the `stable-2026b` profile with the fixture's endpoint (see the
+[component blueprint](../../../../deploy/profiles/stable-2026b/components/vizier/README.md)):
 
 ```yaml
 components:

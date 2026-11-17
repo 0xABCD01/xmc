@@ -20,8 +20,10 @@ filegroup(
         "values.yaml",
         ":rules",
         "//deploy/profiles/stable-2026b/components/clickhouse:chart",
+        "//deploy/profiles/stable-2026b/components/hpo:chart",
         "//deploy/profiles/stable-2026b/components/ingestion-gateway:chart",
         "//deploy/profiles/stable-2026b/components/redpanda:chart",
+        "//deploy/profiles/stable-2026b/components/vizier:chart",
     ] + glob(["templates/**"]),
     visibility = ["//visibility:public"],
 )
@@ -29,6 +31,9 @@ filegroup(
 go_library(
     name = "stable2026b",
     srcs = ["charts.go"],
+    embedsrcs = [
+        "//deploy/profiles/stable-2026b/components/hpo:chart",
+    ],
     importpath = "xmanager_cloud/deploy/profiles/stable-2026b",
     visibility = ["//visibility:public"],
 )

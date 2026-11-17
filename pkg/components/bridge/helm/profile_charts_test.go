@@ -23,6 +23,9 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v3/pkg/engine"
+
 	"xmanager_cloud/internal/logging"
 )
 
@@ -107,15 +110,54 @@ func TestProfileChartsComponentChart(t *testing.T) {
 	}
 }
 
-// TestDefaultProfileCharts checks the embedded registry: stable-2026b is known and its metadata-only ingestion-gateway
-// entry resolves to the stable-2026a chart.
+// TestDefaultProfileCharts checks the embedded registry: stable-2026b is known, embeds hpo, and its metadata-only
+// ingestion-gateway entry resolves to the stable-2026a chart; stable-2026a does not ship hpo.
 func TestDefaultProfileCharts(t *testing.T) {
 	if got := defaultProfileCharts.resolve(context.Background(), "stable-2026b"); got != "stable-2026b" {
 		t.Errorf("resolve(stable-2026b) = %q, want stable-2026b", got)
 	}
-	ch, err := defaultProfileCharts.componentChart("stable-2026b", "ingestion-gateway", "0.1.0")
-	if err != nil || ch == nil || ch.Name() != "ingestion-gateway" {
-		t.Errorf("componentChart(stable-2026b, ingestion-gateway) = %v, %v; want the stable-2026a ingestion-gateway chart", ch, err)
+	tests := []struct {
+		profile   string
+		component string
+		wantChart string // empty means no embedded chart
+	}{
+		{profile: "stable-2026b", component: "ingestion-gateway", wantChart: "ingestion-gateway"},
+		{profile: "stable-2026b", component: "hpo", wantChart: "hpo"},
+		{profile: DefaultProfile, component: "hpo"},
+	}
+	for _, tc := range tests {
+		ch, err := defaultProfileCharts.componentChart(tc.profile, tc.component, "0.1.0")
+		got := ""
+		if ch != nil {
+			got = ch.Name()
+		}
+		if err != nil || got != tc.wantChart {
+			t.Errorf("componentChart(%s, %s) = %q, %v; want chart %q", tc.profile, tc.component, got, err, tc.wantChart)
+		}
+	}
+}
+
+// TestDefaultProfileCharts_Stable2026bHPORendersWorkload renders the hpo chart that stable-2026b embeds as the
+// xmc-cmp-hpo release: the workload renders and the Component CR does not.
+func TestDefaultProfileCharts_Stable2026bHPORendersWorkload(t *testing.T) {
+	ch, err := defaultProfileCharts.componentChart("stable-2026b", "hpo", "")
+	if err != nil || ch == nil {
+		t.Fatalf("componentChart(stable-2026b, hpo) = %v, %v; want the embedded hpo chart", ch, err)
+	}
+	releaseOpts := chartutil.ReleaseOptions{Name: "xmc-cmp-hpo", Namespace: "xmc", Revision: 1, IsInstall: true}
+	vals, err := chartutil.ToRenderValues(ch, map[string]any{"hpoDeployment": map[string]any{"enabled": true}}, releaseOpts, nil)
+	if err != nil {
+		t.Fatalf("ToRenderValues(xmc-cmp-hpo) failed: %v", err)
+	}
+	rendered, err := engine.Render(ch, vals)
+	if err != nil {
+		t.Fatalf("engine.Render(xmc-cmp-hpo) failed: %v", err)
+	}
+	if got := strings.TrimSpace(rendered["hpo/templates/component.yaml"]); got != "" {
+		t.Errorf("xmc-cmp-hpo rendered component.yaml = %q, want empty (guarded by not hasPrefix xmc-cmp-)", got)
+	}
+	if got := rendered["hpo/templates/deployment.yaml"]; !strings.Contains(got, "name: xmc-study-controller") {
+		t.Errorf("xmc-cmp-hpo rendered deployment.yaml = %q, want the xmc-study-controller Deployment", got)
 	}
 }
 

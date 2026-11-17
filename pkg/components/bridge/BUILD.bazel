@@ -109,6 +109,7 @@ go_test(
     ],
     data = [
         "//deploy/helm:chart",
+        "//deploy/profiles/stable-2026b/components/hpo:chart",
     ] + select({
         "@io_bazel_rules_go//go/platform:darwin_amd64": ["@kubebuilder_envtest_darwin_amd64//:assets"],
         "@io_bazel_rules_go//go/platform:darwin_arm64": ["@kubebuilder_envtest_darwin_arm64//:assets"],
@@ -167,6 +168,7 @@ go_test(
         "@org_golang_google_protobuf//proto",
         "@org_golang_x_oauth2//:oauth2",
         "@sh_helm_helm_v3//pkg/chart",
+        "@sh_helm_helm_v3//pkg/chart/loader",
         "@sh_helm_helm_v3//pkg/release",
     ],
 )

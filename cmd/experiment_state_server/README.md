@@ -96,7 +96,8 @@ unless:
   `LOG` and `REVERSE_LOG` scales require positive values, and categorical parameters take no scale.
 - `max_trial_budget` and `max_parallel_trials` are positive.
 
-A study requires the `hpo` component, which depends on `vizier` and `clickhouse`. `CreateExperiment`
+A study requires the `hpo` component, which depends on `vizier` and `clickhouse`; `hpo` and `vizier`
+ship, disabled by default, in the [`stable-2026b` profile](../../deploy/profiles/stable-2026b/README.md). `CreateExperiment`
 checks that all three are ready before allocating an XID and again in the transaction that inserts
 the experiment, then pins them as `ExperimentComponentSnapshots` at their current generation (see
 [Create Experiment](../../docs/flows/experiment_lifecycle.md#1-create-experiment)). Because `hpo` and
@@ -104,7 +105,8 @@ the experiment, then pins them as `ExperimentComponentSnapshots` at their curren
 "uses experimental components" `WARNING` to the status returned by `GetExperiment` and
 `GetExperimentStatus` while the study is `ACTIVE`; the warning is computed at read time and never stored.
 
-The operator limits study size with the `hpo` component parameter `maxTrialBudget` (default `1000`). In the
+The operator limits study size with the `hpo` component parameter `maxTrialBudget` (default `1000`;
+see the [hpo component README](../../deploy/profiles/stable-2026b/components/hpo/README.md)). In the
 creation transaction, ESS caps a larger `max_trial_budget` at that limit, stores the effective value,
 and appends a warning such as `max_trial_budget 5000 exceeds the hpo component limit; clamped to
 1000` to the initial status message, raising it to `WARNING`. Unlike the drift and experimental
