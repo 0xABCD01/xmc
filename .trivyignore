@@ -17,6 +17,3 @@ KSV-0014
 
 # KSV-0017: The nightly/test in-cluster k3s MultiKueue worker addon requires privileged execution to run a nested kubelet and containerd.
 KSV-0017
-
-# AVD-GCP-0005: GKE Autopilot nodes across host and MultiKueue worker projects run as the GCP-managed Compute Engine default service account (<PROJECT_NUMBER>-compute@developer.gserviceaccount.com) and require roles/artifactregistry.reader to pull private container images.
-AVD-GCP-0005

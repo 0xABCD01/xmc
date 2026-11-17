@@ -97,23 +97,23 @@ The XMC services require OCI container images built from the codebase. You must 
    image_tag: "<IMAGE_TAG>"
    ```
 
-6. **Grant Artifact Registry reader access to GKE node service accounts** (automated in Cluster Toolkit v2 via `worker_project_ids`; required manually when deploying to existing GKE Autopilot clusters or MultiKueue worker projects via standalone Helm):
-   GKE kubelets pull container images using the **node's IAM service account** rather than the pod's Workload Identity service account. On GKE Autopilot clusters (and default-SA node pools), nodes use the Compute Engine default service account (`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`).
-   - **Cluster Toolkit v2 (`deploy/ctk_v2`)**: Set `worker_project_ids: ["<WORKER_PROJECT_ID_1>", ...]` in `xmanager-cloud-deployment.yaml`. The `default_compute_sa_artifact_registry_reader` module automatically grants `roles/artifactregistry.reader` to the host and worker Compute Engine default service accounts.
-   - **Standalone Helm / Existing Clusters**: Grant `roles/artifactregistry.reader` on the image registry project (and each worker project) to the Compute Engine default service accounts:
+6. **Grant Artifact Registry repository reader access to external GKE node service accounts** (host cluster node pools in Cluster Toolkit v2 use `xmc-np-sa` automatically; required only for external MultiKueue worker clusters or standalone Helm deployments):
+   GKE kubelets pull container images using the **node's IAM service account** rather than the pod's Workload Identity service account. Provision GKE Standard node pools and GKE Autopilot clusters with a dedicated custom node IAM service account (`gcloud container clusters create-auto ... --service-account=<NODE_SA_EMAIL>` or `ComputeClass` `spec.nodePoolConfig.serviceAccount`) rather than the Compute Engine default service account:
+   - **Cluster Toolkit v2 (`deploy/ctk_v2`)**: Set `reader_service_accounts: ["<WORKER_NODE_SA_EMAIL>"]` in `xmanager-cloud-deployment.yaml` to grant repository-scoped `roles/artifactregistry.reader` on `image_registry`.
+   - **Standalone Helm / Existing Clusters**: Grant repository-scoped `roles/artifactregistry.reader` on the `xmc` Artifact Registry repository to each cluster's custom node service account:
      ```bash
-     HOST_PROJECT_ID="<PROJECT_ID>"
-     for SA_PROJECT in "${HOST_PROJECT_ID}" <WORKER_PROJECT_IDS...>; do
-       PROJECT_NUM=$(gcloud projects describe "${SA_PROJECT}" --format="value(projectNumber)")
-       COMPUTE_SA="serviceAccount:${PROJECT_NUM}-compute@developer.gserviceaccount.com"
-       gcloud projects add-iam-policy-binding "${HOST_PROJECT_ID}" \
-         --member="${COMPUTE_SA}" \
+     REGISTRY_PROJECT_ID="<PROJECT_ID>"
+     REGISTRY_LOCATION="<LOCATION>"
+     REGISTRY_REPO="xmc"
+     NODE_SERVICE_ACCOUNTS=(
+       "<CUSTOM_NODE_SA_EMAIL>"
+     )
+     for NODE_SA in "${NODE_SERVICE_ACCOUNTS[@]}"; do
+       gcloud artifacts repositories add-iam-policy-binding "${REGISTRY_REPO}" \
+         --project="${REGISTRY_PROJECT_ID}" \
+         --location="${REGISTRY_LOCATION}" \
+         --member="serviceAccount:${NODE_SA}" \
          --role="roles/artifactregistry.reader"
-       if [ "${SA_PROJECT}" != "${HOST_PROJECT_ID}" ]; then
-         gcloud projects add-iam-policy-binding "${SA_PROJECT}" \
-           --member="${COMPUTE_SA}" \
-           --role="roles/artifactregistry.reader"
-       fi
      done
      ```
 
@@ -623,7 +623,7 @@ Supply these parameters in your Cluster Toolkit overrides file (`xmanager-cloud-
 | Parameter Name | Required? | Default Value | Used By / Description |
 |---|---|---|---|
 | `project_id` | **Yes** | - | Target Google Cloud Project ID |
-| `worker_project_ids` | No | `[]` | Additional GCP project IDs hosting MultiKueue worker clusters whose Compute Engine default service accounts receive `roles/artifactregistry.reader` |
+| `reader_service_accounts` | No | `[]` | Additional custom GCP service account emails (e.g. external MultiKueue worker node SAs) granted repository-scoped `roles/artifactregistry.reader` on `image_registry` (Cluster Toolkit only) |
 | `deployment_name` | **Yes** | - | Unique prefix for resource naming (e.g. `xmc-v2-run`) |
 | `region` | **Yes** | - | Google Cloud region for resource provisioning (e.g. `us-west1`) |
 | `domain_name` | **Yes** | - | Base DNS domain name for external endpoints (e.g. `example.com`) |

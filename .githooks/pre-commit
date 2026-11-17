@@ -455,10 +455,10 @@ check_tflint() {
 check_helm() {
   # helm lint covers the whole chart, so fix mode runs it for any staged add,
   # modify, delete or rename under deploy/helm/; chart/blueprint unit tests in
-  # test/helm/ also run when deploy/ctk_v2/xmanager-cloud.yaml or test/helm/ changes.
+  # test/helm/ also run when deploy/ctk_v2/ YAML/Terraform modules or test/helm/ changes.
   if [ "${MODE}" = "check" ]; then
     if [ -z "$(find deploy/helm test/helm -type f \( -name "*.yaml" -o -name "*.yml" -o -name "*_test.py" \) || true)" ]; then return; fi
-  elif ! staged_paths_match AMD '^(deploy/helm/|deploy/ctk_v2/xmanager-cloud\.yaml$|test/helm/)'; then
+  elif ! staged_paths_match AMD '^(deploy/helm/|deploy/ctk_v2/([^/]+\.ya?ml$|modules/)|test/helm/)'; then
     return
   fi
 

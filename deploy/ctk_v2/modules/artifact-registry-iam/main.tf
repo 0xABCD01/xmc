@@ -13,35 +13,40 @@
 # limitations under the License.
 
 locals {
-  all_project_ids = toset(compact(concat([var.project_id], var.worker_project_ids)))
+  ar_matches = regexall(
+    "^([a-z0-9-]+)-docker\\.pkg\\.dev/([^/]+)/([^/]+)(?:/.*)?$",
+    trimspace(var.image_registry),
+  )
+  is_artifact_registry = length(local.ar_matches) == 1
 
-  iam_bindings = {
-    for pair in concat(
-      [
-        for sa_project_id in local.all_project_ids : {
-          target_project_id = var.project_id
-          sa_project_id     = sa_project_id
-        }
-      ],
-      [
-        for worker_project_id in toset(compact(var.worker_project_ids)) : {
-          target_project_id = worker_project_id
-          sa_project_id     = worker_project_id
-        } if worker_project_id != var.project_id
-      ],
-    ) : "${pair.target_project_id}:${pair.sa_project_id}" => pair
+  repository_location   = local.is_artifact_registry ? local.ar_matches[0][0] : ""
+  repository_project_id = local.is_artifact_registry ? local.ar_matches[0][1] : ""
+  repository_id         = local.is_artifact_registry ? local.ar_matches[0][2] : ""
+
+  reader_sa_emails = toset(compact([for sa in var.reader_service_accounts : trimspace(sa)]))
+}
+
+check "artifact_registry_uri_when_readers_configured" {
+  assert {
+    condition     = length(local.reader_sa_emails) == 0 || local.is_artifact_registry
+    error_message = "image_registry (${var.image_registry}) must match '<LOCATION>-docker.pkg.dev/<PROJECT_ID>/<REPO>' when reader_service_accounts is non-empty."
   }
 }
 
-data "google_project" "projects" {
-  for_each   = local.all_project_ids
-  project_id = each.value
+resource "google_artifact_registry_repository_iam_member" "node_pool_reader" {
+  count      = local.is_artifact_registry && var.enable_node_sa_binding ? 1 : 0
+  project    = local.repository_project_id
+  location   = local.repository_location
+  repository = local.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${var.node_service_account_email}"
 }
 
-# trivy:ignore:AVD-GCP-0005
-resource "google_project_iam_member" "default_compute_sa_artifact_registry_reader" {
-  for_each = local.iam_bindings
-  project  = each.value.target_project_id
-  role     = "roles/artifactregistry.reader"
-  member   = "serviceAccount:${data.google_project.projects[each.value.sa_project_id].number}-compute@developer.gserviceaccount.com"
+resource "google_artifact_registry_repository_iam_member" "additional_readers" {
+  for_each   = local.is_artifact_registry ? local.reader_sa_emails : toset([])
+  project    = local.repository_project_id
+  location   = local.repository_location
+  repository = local.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${each.value}"
 }

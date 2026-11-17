@@ -21,7 +21,7 @@ Open `deploy/ctk_v2/xmanager-cloud-deployment.yaml` and configure the deployment
 ### Core Variables
 *   **`deployment_name`**: A unique string identifier appended to all provisioned resource names (e.g., `xmc-v2-run`).
 *   **`project_id`**: The target Google Cloud Project ID where the XMC infrastructure will be deployed.
-*   **`worker_project_ids`**: Optional list of additional GCP Project IDs hosting MultiKueue worker clusters (default: `[]`). The blueprint automatically grants `roles/artifactregistry.reader` to the Compute Engine default service account (`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`) of `project_id` and every project in `worker_project_ids` so GKE Autopilot and default-SA nodes can pull private images from Artifact Registry across host and worker projects.
+*   **`reader_service_accounts`**: Optional list of additional custom GCP service account emails (default: `[]`, e.g. dedicated node service accounts for external MultiKueue worker clusters) granted repository-scoped `roles/artifactregistry.reader` on the `image_registry` Artifact Registry repository. Host cluster node pools use the blueprint-managed `xmc-np-sa` service account automatically.
 *   **`region`**: The GCP region for GKE compute node pools, Spanner, and networking assets (e.g., `us-west1`).
 *   **`environment`**: An environment suffix tag used in resource names (e.g., `xmcv2`).
 *   **`domain_name`**: The base DNS domain name for the API endpoints (e.g., `example.com`). For details on why a domain is required and how to configure free Google-managed domains, see [Domain Configuration in INSTALL.md](../../INSTALL.md#3-dns-and-domain-name-configuration).

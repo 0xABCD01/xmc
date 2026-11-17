@@ -12,13 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-variable "project_id" {
-  description = "The host GCP project ID."
+variable "image_registry" {
+  description = "Target Artifact Registry Docker repository URI (<LOCATION>-docker.pkg.dev/<PROJECT_ID>/<REPO>)."
   type        = string
+  default     = ""
+  nullable    = false
 }
 
-variable "worker_project_ids" {
-  description = "Additional GCP project IDs hosting MultiKueue worker clusters whose Compute Engine default service accounts require Artifact Registry reader access."
+variable "enable_node_sa_binding" {
+  description = "Whether to grant repository reader access to node_service_account_email."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "node_service_account_email" {
+  description = "Cluster node pool GCP service account email granted Artifact Registry reader access when enable_node_sa_binding is true."
+  type        = string
+  default     = ""
+  nullable    = false
+}
+
+variable "reader_service_accounts" {
+  description = "Additional custom GCP service account emails (e.g. MultiKueue worker or GKE Autopilot custom node service accounts) granted Artifact Registry repository reader access."
   type        = list(string)
   default     = []
+  nullable    = false
+
+  validation {
+    condition = alltrue([
+      for sa in var.reader_service_accounts :
+      trimspace(sa) != "" &&
+      can(regex("^[^:\\s]+@[^\\s]+\\.gserviceaccount\\.com$", trimspace(sa))) &&
+      !endswith(trimspace(sa), "-compute@developer.gserviceaccount.com")
+    ])
+    error_message = "Each entry in reader_service_accounts must be a non-empty bare custom GCP service account email (without 'serviceAccount:') and must not be a Compute Engine default service account ('*-compute@developer.gserviceaccount.com')."
+  }
 }
