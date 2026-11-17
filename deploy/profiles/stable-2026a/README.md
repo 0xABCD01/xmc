@@ -130,9 +130,10 @@ Component runtime dependencies are not Helm dependencies. They are expressed in 
 
 ## Versioning
 
-- Each component's `components/<name>/Chart.yaml` `version` is rendered into `spec.version` and `spec.chartVersion`.
+- Each component's `components/<name>/Chart.yaml` `version` is rendered into `spec.version` and `spec.chartVersion` (versioning XMC's wrapper/component contract, not any external Bring-Your-Own server version).
 - A profile patch release bumps the changed component's `Chart.yaml` version and the patch version in the profile [`Chart.yaml`](Chart.yaml).
 - [`profile.yaml`](profile.yaml) records the minimum XMC release and the support window. A test keeps its `name` consistent with the `Chart.yaml` annotation, `values.yaml`, and `values.schema.json`.
+- For evolving 3P wrapper parameters, `rules.yaml` SemVer compatibility bounds, `spec.wrapperRef` CRD API upgrades, or minimum upstream 3P server/API version checks, follow [`docs/migrations/3p_component_contract_updates.md`](../../../docs/migrations/3p_component_contract_updates.md).
 
 ## How the Profile Renders Components
 
