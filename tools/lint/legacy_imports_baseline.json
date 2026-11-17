@@ -1,7 +1,7 @@
 {
   "compat_go_targets": 0,
   "gazelle_resolve_directives": 0,
-  "generic_helper_filenames": 27,
+  "generic_helper_filenames": 28,
   "go_legacy_root_imports": 0,
   "go_unresolved_module_imports": 0,
   "helm_google3_flags": 0,
