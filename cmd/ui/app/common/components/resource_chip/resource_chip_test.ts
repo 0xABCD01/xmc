@@ -12,20 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 import { getHarness } from '@angular/cdk/testing/catalyst/async';
-import { TestBed } from '@angular/core/testing';
+import { Component, signal } from '@angular/core';
 import { MatChipHarness } from '@angular/material/chips/testing';
 import { NoopAnimationsModule } from '@angular/platform-browser/animations';
 
-import { bootstrap, setupModule } from 'app/testing/test';
+import { bootstrap, cleanState, flush, setupModule } from 'app/testing/test';
 
 import { ResourceChip, ResourceType } from './resource_chip';
 
+@Component({
+  standalone: true,
+  imports: [ResourceChip],
+  template: `<xmc-resource-chip [resourceType]="resourceType()" text="Resource" />`,
+})
+class TestHostComponent {
+  readonly resourceType = signal<ResourceType>(ResourceType.CPU);
+}
+
 describe('ResourceChip Component', () => {
-  beforeEach(() => {
+  cleanState(() => {
     setupModule({
-      imports: [ResourceChip, NoopAnimationsModule],
+      imports: [ResourceChip, TestHostComponent, NoopAnimationsModule],
     });
-  });
+    return {};
+  }, beforeEach);
 
   it('should display the correct text inside the chip', async () => {
     const testText = 'CPU Usage: 80%';
@@ -59,21 +69,18 @@ describe('ResourceChip Component', () => {
     });
   }
 
-  it('updates chip class cleanly when resourceType changes without dropping host classes', () => {
-    const fixture = TestBed.createComponent(ResourceChip);
-    fixture.componentRef.setInput('resourceType', ResourceType.CPU);
-    fixture.componentRef.setInput('text', 'CPU');
-    fixture.detectChanges();
+  it('updates chip class cleanly when resourceType changes without dropping host classes', async () => {
+    const hostComp = bootstrap(TestHostComponent);
+    const chipHost = await (await getHarness(MatChipHarness)).host();
 
-    const chipEl = fixture.nativeElement.querySelector('mat-chip') as HTMLElement;
-    expect(chipEl.classList.contains('mat-mdc-chip')).toBeTrue();
-    expect(chipEl.classList.contains('grey')).toBeTrue();
+    expect(await chipHost.hasClass('mat-mdc-chip')).toBeTrue();
+    expect(await chipHost.hasClass('grey')).toBeTrue();
 
-    fixture.componentRef.setInput('resourceType', ResourceType.GPU);
-    fixture.detectChanges();
+    hostComp.resourceType.set(ResourceType.GPU);
+    await flush();
 
-    expect(chipEl.classList.contains('mat-mdc-chip')).toBeTrue();
-    expect(chipEl.classList.contains('grey')).toBeFalse();
-    expect(chipEl.classList.contains('green')).toBeTrue();
+    expect(await chipHost.hasClass('mat-mdc-chip')).toBeTrue();
+    expect(await chipHost.hasClass('grey')).toBeFalse();
+    expect(await chipHost.hasClass('green')).toBeTrue();
   });
 });

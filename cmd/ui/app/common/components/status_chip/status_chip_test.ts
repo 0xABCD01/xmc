@@ -12,20 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 import { getHarness } from '@angular/cdk/testing/catalyst/async';
-import { TestBed } from '@angular/core/testing';
+import { Component, signal } from '@angular/core';
 import { MatChipHarness } from '@angular/material/chips/testing';
 import { NoopAnimationsModule } from '@angular/platform-browser/animations';
 
-import { bootstrap, setupModule } from 'app/testing/test';
+import { bootstrap, cleanState, flush, setupModule } from 'app/testing/test';
 
 import { StatusChip, StatusOption } from './status_chip';
 
+@Component({
+  standalone: true,
+  imports: [StatusChip],
+  template: `<xmc-status-chip [status]="status()" />`,
+})
+class TestHostComponent {
+  readonly status = signal<StatusOption>(StatusOption.RUNNING);
+}
+
 describe('StatusChip Component', () => {
-  beforeEach(() => {
+  cleanState(() => {
     setupModule({
-      imports: [StatusChip, NoopAnimationsModule],
+      imports: [StatusChip, TestHostComponent, NoopAnimationsModule],
     });
-  });
+    return {};
+  }, beforeEach);
 
   it('displays status with optional replica count', async () => {
     bootstrap(StatusChip, { status: StatusOption.RUNNING, replicas: 4 });
@@ -68,20 +78,18 @@ describe('StatusChip Component', () => {
     });
   }
 
-  it('updates chip color class dynamically when status changes without dropping host classes', () => {
-    const fixture = TestBed.createComponent(StatusChip);
-    fixture.componentRef.setInput('status', StatusOption.RUNNING);
-    fixture.detectChanges();
+  it('updates chip color class dynamically when status changes without dropping host classes', async () => {
+    const hostComp = bootstrap(TestHostComponent);
+    const chipHost = await (await getHarness(MatChipHarness)).host();
 
-    const chipEl = fixture.nativeElement.querySelector('mat-chip') as HTMLElement;
-    expect(chipEl.classList.contains('mat-mdc-chip')).toBeTrue();
-    expect(chipEl.classList.contains('blue')).toBeTrue();
+    expect(await chipHost.hasClass('mat-mdc-chip')).toBeTrue();
+    expect(await chipHost.hasClass('blue')).toBeTrue();
 
-    fixture.componentRef.setInput('status', StatusOption.COMPLETED);
-    fixture.detectChanges();
+    hostComp.status.set(StatusOption.COMPLETED);
+    await flush();
 
-    expect(chipEl.classList.contains('mat-mdc-chip')).toBeTrue();
-    expect(chipEl.classList.contains('blue')).toBeFalse();
-    expect(chipEl.classList.contains('green')).toBeTrue();
+    expect(await chipHost.hasClass('mat-mdc-chip')).toBeTrue();
+    expect(await chipHost.hasClass('blue')).toBeFalse();
+    expect(await chipHost.hasClass('green')).toBeTrue();
   });
 });
