@@ -25,6 +25,7 @@ import (
 	"helm.sh/helm/v3/pkg/chart/loader"
 
 	stable2026a "xmanager_cloud/deploy/profiles/stable-2026a"
+	stable2026b "xmanager_cloud/deploy/profiles/stable-2026b"
 	"xmanager_cloud/internal/logging"
 )
 
@@ -36,12 +37,14 @@ const (
 	DefaultProfile = "stable-2026a"
 )
 
-// ProfileCharts maps each profile name to the 1P component charts embedded for it, rooted at components/<name>/.
+// ProfileCharts maps each profile name to the 1P component charts embedded for it, rooted at components/<name>/. A
+// profile embeds only the charts it changes; see componentChart.
 type ProfileCharts map[string]fs.FS
 
 // defaultProfileCharts are the profiles embedded in the bridge binary. It is never modified; see WithProfileCharts.
 var defaultProfileCharts = ProfileCharts{
 	DefaultProfile: stable2026a.EmbeddedCharts,
+	"stable-2026b": stable2026b.EmbeddedCharts,
 }
 
 // resolve returns lookup(profile) and logs a non-empty profile without an entry (an unknown or skewed xmc.dev/profile
@@ -63,13 +66,26 @@ func (charts ProfileCharts) lookup(profile string) string {
 	return DefaultProfile
 }
 
-// componentChart loads the chart that the resolved profile embeds for componentName. It returns a nil chart when the
-// profile embeds no chart for the component.
-func (charts ProfileCharts) componentChart(profile, componentName string) (*chart.Chart, error) {
+// componentChart loads the chart that the resolved profile embeds for componentName. A profile that does not embed the
+// component (its catalog entry is metadata-only) falls back to the DefaultProfile chart of the same name, which must
+// have the requested chartVersion (the Component's spec.chartVersion; empty skips the check). It returns a nil chart
+// when neither profile embeds a chart for the component.
+func (charts ProfileCharts) componentChart(profile, componentName, chartVersion string) (*chart.Chart, error) {
 	if !isSafeComponentSegment(componentName) {
 		return nil, nil
 	}
-	return loadEmbeddedChart(charts[profile], "components/"+componentName)
+	root := "components/" + componentName
+	ch, err := loadEmbeddedChart(charts[profile], root)
+	if ch != nil || err != nil || profile == DefaultProfile {
+		return ch, err
+	}
+	if ch, err = loadEmbeddedChart(charts[DefaultProfile], root); ch == nil || err != nil {
+		return ch, err
+	}
+	if chartVersion != "" && ch.Metadata.Version != chartVersion {
+		return nil, fmt.Errorf("profile %q embeds no %s chart, and the %s fallback chart has version %s instead of the requested chartVersion %s", profile, componentName, DefaultProfile, ch.Metadata.Version, chartVersion)
+	}
+	return ch, nil
 }
 
 // loadEmbeddedChart loads the chart rooted at root in fsys, or returns a nil chart when fsys is nil or root does not

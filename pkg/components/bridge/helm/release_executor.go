@@ -39,7 +39,9 @@ type upgradeRequest struct {
 	chartPath string
 	// profile selects the embedded chart when chartPath is empty.
 	profile string
-	values  map[string]any
+	// chartVersion is the version a DefaultProfile fallback chart must have; see ProfileCharts.componentChart.
+	chartVersion string
+	values       map[string]any
 	// seq identifies this enqueue in pendingUpgrades so only the latest request clears the in-flight marker.
 	seq uint64
 }
@@ -149,7 +151,7 @@ func (m *K8sHelmManager) registerProducer() bool {
 	return true
 }
 
-func (m *K8sHelmManager) triggerUpgrade(ctx context.Context, ref ComponentRef, profile string, values map[string]any) error {
+func (m *K8sHelmManager) triggerUpgrade(ctx context.Context, ref ComponentRef, opts HelmComponentOptions, values map[string]any) error {
 	if ref.Namespace == "" {
 		return m.failUpgrade(ref, errors.New("component namespace must not be empty"))
 	}
@@ -159,7 +161,7 @@ func (m *K8sHelmManager) triggerUpgrade(ctx context.Context, ref ComponentRef, p
 	if m.runner == nil {
 		return m.failUpgrade(ref, errors.New("helm action runner is uninitialized; cannot actuate release upgrade"))
 	}
-	req := upgradeRequest{ref: ref, namespace: ref.Namespace, chartPath: m.resolveChartPathForComponent(ref), profile: profile, values: values}
+	req := upgradeRequest{ref: ref, namespace: ref.Namespace, chartPath: m.resolveChartPathForComponent(ref), profile: opts.Profile, chartVersion: opts.ChartVersion, values: values}
 	if !m.registerProducer() {
 		return m.failUpgrade(ref, errManagerStopped)
 	}
@@ -223,7 +225,7 @@ func (m *K8sHelmManager) requestChart(req upgradeRequest, componentName string) 
 	if req.chartPath != "" {
 		return m.loadComponentChart(req.chartPath)
 	}
-	return m.profileCharts.componentChart(req.profile, componentName)
+	return m.profileCharts.componentChart(req.profile, componentName, req.chartVersion)
 }
 
 // uninstallRelease discards any queued async upgrade and uninstalls the component's Helm release under the upgrade

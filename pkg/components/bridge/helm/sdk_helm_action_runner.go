@@ -296,7 +296,7 @@ func (r *SDKHelmActionRunner) resolveChart(releaseName string, chartObj *chart.C
 // named after the release when none is embedded or it fails to load. Callers that know the Component's profile pass
 // its embedded chart to Upgrade instead (see K8sHelmManager.upgradeRelease).
 func defaultComponentChart(name string) *chart.Chart {
-	ch, err := defaultProfileCharts.componentChart(DefaultProfile, componentNameFromRelease(name))
+	ch, err := defaultProfileCharts.componentChart(DefaultProfile, componentNameFromRelease(name), "")
 	if err != nil {
 		logging.Warn(context.Background(), "Failed to load embedded default component chart; using an empty stub chart", "release", name, "error", err)
 	}

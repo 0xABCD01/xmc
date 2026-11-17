@@ -65,6 +65,9 @@ type HelmComponentOptions struct {
 	// Profile is the Component's xmc.dev/profile label (ProfileLabel). It selects the embedded chart installed when no
 	// chart path applies; a missing or unknown profile selects DefaultProfile.
 	Profile string
+	// ChartVersion is the Component's spec.chartVersion. A profile falling back to the DefaultProfile chart of a
+	// metadata-only catalog entry requires that chart to have this version.
+	ChartVersion string
 	// Enabled indicates whether the component should be enabled in the Helm release.
 	Enabled bool
 	// ImageTag specifies an optional container image tag override.
@@ -336,6 +339,7 @@ func applyVersionAndImageTag(opts *HelmComponentOptions, specMap map[string]any)
 	if chartVer != "" && opts.ImageTag == chartVer {
 		opts.ImageTagFromChartVersion = true
 	}
+	opts.ChartVersion = chartVer
 	if tag, ok := specMap["imageTag"].(string); ok && strings.TrimSpace(tag) != "" {
 		opts.ImageTag = strings.TrimSpace(tag)
 		opts.ImageTagFromChartVersion = false

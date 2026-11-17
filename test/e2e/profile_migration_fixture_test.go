@@ -31,7 +31,7 @@ const (
 	workloadFailMarker = "WORKLOAD_FAIL"
 )
 
-// profileOverlay is the test-only stable-2026b fixture; see testdata/profile_migration.
+// profileOverlay is the test-only stable-2099z fixture; see testdata/profile_migration.
 type profileOverlay struct {
 	Profile       string            `json:"profile"`
 	ImageTag      string            `json:"imageTag"`

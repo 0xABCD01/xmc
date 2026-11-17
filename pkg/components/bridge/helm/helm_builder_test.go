@@ -217,6 +217,11 @@ func TestParseHelmComponentOptions(t *testing.T) {
 	if _, leaked := depVals["chartPath"]; leaked {
 		t.Errorf("expected chartPath to be excluded from Helm deployment values, got %+v", depVals)
 	}
+
+	chartVersionOpts := ParseHelmComponentOptions("ingestion-gateway", "xmc", map[string]any{"chartVersion": " 0.1.1 "}, nil)
+	if chartVersionOpts.ChartVersion != "0.1.1" {
+		t.Errorf("expected ChartVersion '0.1.1', got %q", chartVersionOpts.ChartVersion)
+	}
 }
 
 func TestResolveImage(t *testing.T) {

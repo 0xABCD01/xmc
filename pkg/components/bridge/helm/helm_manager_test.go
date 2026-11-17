@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -1067,5 +1068,28 @@ func seedComponentValues(ctx context.Context, t *testing.T, client *fake.Clients
 	}
 	if _, err := client.CoreV1().ConfigMaps(ref.Namespace).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("failed to seed values ConfigMap: %v", err)
+	}
+}
+
+// TestK8sHelmManager_EnsureFailsOnFallbackChartVersionMismatch verifies that a metadata-only entry whose requested
+// chartVersion differs from the DefaultProfile fallback chart fails the upgrade instead of installing the wrong chart.
+func TestK8sHelmManager_EnsureFailsOnFallbackChartVersionMismatch(t *testing.T) {
+	ctx := context.Background()
+	runner := &mockHelmActionRunner{}
+	charts := testProfileCharts("ingestion-gateway-test")
+	charts["stable-metadata-only"] = fstest.MapFS{}
+	mgr := NewK8sHelmManager(fake.NewClientset(), "xmc", "xmanager-cloud", WithActionRunner(runner), WithSyncExecution(true), WithProfileCharts(charts))
+	defer mgr.Close()
+	ref := ComponentRef{Namespace: "xmc", Name: "ingestion-gateway"}
+
+	err := mgr.Ensure1PComponent(ctx, ref, HelmComponentOptions{Ref: ref, Enabled: true, Profile: "stable-metadata-only", ChartVersion: "0.2.0"})
+	if err == nil || !strings.Contains(err.Error(), "requested chartVersion 0.2.0") {
+		t.Fatalf("Ensure1PComponent() error = %v, want a chartVersion mismatch", err)
+	}
+	if runner.upgradeCalls != 0 {
+		t.Errorf("upgrade calls = %d, want 0", runner.upgradeCalls)
+	}
+	if mgr.GetUpgradeError(ref) == nil {
+		t.Error("GetUpgradeError() = nil, want the mismatch recorded so the Component is not Ready")
 	}
 }

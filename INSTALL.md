@@ -320,6 +320,8 @@ We provide automated HPC Cluster Toolkit blueprints to compile and deploy the en
    ```
    If `dashboard-service` was already running before you enabled `clickhouse` (or `bigquery`), wait until `xmc-bridge` has reconciled the enabled component (use `component.xmc.dev/bigquery` when enabling BigQuery) and then restart it once so it picks up the new data engine: `kubectl wait component.xmc.dev/clickhouse -n xmc --for=condition=Ready --timeout=120s && kubectl rollout restart deployment/dashboard-service-deployment -n xmc`.
 
+   XMC `1.0.1+` also ships the preview [`stable-2026b` profile](deploy/profiles/stable-2026b/README.md) (not released yet; it may change incompatibly), installed the same way from `./deploy/profiles/stable-2026b`.
+
 ---
 
 ## Approach 3: Terraform and Helm Directly (Hands-on)
