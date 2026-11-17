@@ -13,4 +13,12 @@
 # limitations under the License.
 
 # Repository code owners (mirrors the OWNERS reviewer pool without absence filtering).
-* @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+# Code owners for GA-locked component profiles and lock enforcement (mirrors the OWNERS reviewer pool).
+/CODEOWNERS @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/OWNERS @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/deploy/profiles/locked_profiles.yaml @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/deploy/profiles/BUILD.bazel @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/deploy/profiles/stable-2026a/ @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/tools/components/check_profile_lock.py @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/tools/components/BUILD.bazel @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/test/helm/profiles/stable2026a/ @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev

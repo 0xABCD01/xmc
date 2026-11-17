@@ -317,38 +317,5 @@ class GitIntegrationProfileLockTest(unittest.TestCase):
             check_profile_lock.load_locked_profiles(self.repo_root)
 
 
-class RepositoryCodeownersAlignmentTest(unittest.TestCase):
-    """Verifies that the repository CODEOWNERS matches the OWNERS reviewer pool."""
-
-    def test_codeowners_matches_owners_pool(self) -> None:
-        repo_root = next(
-            (
-                base
-                for base in (
-                    Path(__file__).absolute().parents[2],
-                    Path(__file__).resolve().parents[2],
-                )
-                if (base / "OWNERS").is_file() and (base / "CODEOWNERS").is_file()
-            ),
-            Path(__file__).resolve().parents[2],
-        )
-        owners_file = repo_root / "OWNERS"
-        codeowners_file = repo_root / "CODEOWNERS"
-        self.assertTrue(owners_file.is_file(), f"Missing OWNERS file at {owners_file}")
-        self.assertTrue(codeowners_file.is_file(), f"Missing CODEOWNERS file at {codeowners_file}")
-
-        owners = [
-            line.split("#", 1)[0].strip()
-            for line in owners_file.read_text(encoding="utf-8").splitlines()
-            if line.split("#", 1)[0].strip()
-        ]
-        codeowner_lines = [
-            line.split("#", 1)[0].strip()
-            for line in codeowners_file.read_text(encoding="utf-8").splitlines()
-            if line.split("#", 1)[0].strip()
-        ]
-        self.assertEqual(codeowner_lines, [f"* {' '.join(f'@{u}' for u in owners)}"])
-
-
 if __name__ == "__main__":
     unittest.main()

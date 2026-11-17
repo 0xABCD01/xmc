@@ -89,6 +89,16 @@ py_test(
     ],
 )
 
+py_test(
+    name = "check_codeowners_alignment_test",
+    srcs = ["check_codeowners_alignment.py"],
+    data = [
+        "//:CODEOWNERS",
+        "//:OWNERS",
+    ],
+    main = "check_codeowners_alignment.py",
+)
+
 py_library(
     name = "precommit_autostage_lib",
     srcs = ["precommit_autostage.py"],

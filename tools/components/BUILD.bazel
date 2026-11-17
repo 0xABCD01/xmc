@@ -48,10 +48,6 @@ py_binary(
 py_test(
     name = "check_profile_lock_test",
     srcs = ["check_profile_lock_test.py"],
-    data = [
-        "//:CODEOWNERS",
-        "//:OWNERS",
-    ],
     imports = ["../.."],
     deps = [
         ":check_profile_lock_lib",

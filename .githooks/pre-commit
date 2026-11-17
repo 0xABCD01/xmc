@@ -200,6 +200,14 @@ check_ui_selector_contract() {
   fi
 }
 
+check_codeowners_alignment() {
+  echo "--> Checking CODEOWNERS Alignment..."
+  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_codeowners_alignment.py; then
+    echo "❌ CODEOWNERS does not align with OWNERS."
+    FAILED=1
+  fi
+}
+
 check_profile_lock() {
   echo "--> Checking Component Profile Release Locks..."
   if ! XMC_BYPASS_VENV=1 python3 tools/components/check_profile_lock.py --staged >/dev/null; then
@@ -597,6 +605,7 @@ main() {
   check_agent_doc_paths
   check_file_naming
   check_ui_selector_contract
+  check_codeowners_alignment
   check_profile_lock
   check_ui
   check_license
