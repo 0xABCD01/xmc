@@ -162,22 +162,29 @@ func (h *WorkUnitHandler) enqueueWorkUnitOnCreation(ctx context.Context, xid, wi
 	err = h.actuator.EnqueueWorkUnitTask(ctx, newWorkUnit.GetCurrentWorkUnitExecution().GetName(), newWorkUnit, client.CreateAction(exp.GetPriority(), email), operation.GetName())
 	if err != nil {
 		logging.Error(ctx, "Failed to enqueue work unit for scheduling", "name", newWorkUnit.GetName(), "error", err)
-		enqueueErr := err
-		_, _, eid, err := validator.ValidateWorkUnitExecutionName(newWorkUnit.GetCurrentWorkUnitExecution().GetName())
-		if err != nil {
-			logging.Error(ctx, "Failed to validate work unit execution name", "error", err)
-			return fmt.Errorf("failed to validate work unit execution name: %w (%v)", grpcerr.ErrInternal, err)
+		if markErr := h.markWorkUnitUnschedulable(ctx, xid, wid, newWorkUnit); markErr != nil {
+			logging.Error(ctx, "Failed to mark work unit unschedulable", "name", newWorkUnit.GetName(), "error", markErr)
 		}
+		return fmt.Errorf("failed to enqueue work unit for scheduling: %w (%v)", grpcerr.ErrInternal, err)
+	}
+	return nil
+}
 
-		if statusMsgErr := h.updateWorkUnitExecutionStatusMessage(ctx, xid, wid, eid, &msgpb.StructuredMessage{
-			UserFacingText: "Work unit was created but could not be scheduled for execution. Please restart the work unit.",
-			Severity:       msgpb.StructuredMessage_FATAL,
-			Source:         msgpb.StructuredMessage_XMANAGER_BACKEND,
-		}, false); statusMsgErr != nil {
-			logging.Error(ctx, "Failed to update work unit execution status message after failed create attempt", "error", statusMsgErr)
-		}
-		logging.Error(ctx, "Failed to enqueue work unit for scheduling", "error", enqueueErr)
-		return fmt.Errorf("failed to enqueue work unit for scheduling: %w (%v)", grpcerr.ErrInternal, enqueueErr)
+// markWorkUnitUnschedulable records a FATAL system message on the current execution of wu, a
+// created work unit whose creation task could not be enqueued. It fails only when wu has an invalid
+// execution name; a failed status update is logged.
+func (h *WorkUnitHandler) markWorkUnitUnschedulable(ctx context.Context, xid, wid int64, wu *msgpb.WorkUnit) error {
+	_, _, eid, err := validator.ValidateWorkUnitExecutionName(wu.GetCurrentWorkUnitExecution().GetName())
+	if err != nil {
+		logging.Error(ctx, "Failed to validate work unit execution name", "error", err)
+		return fmt.Errorf("failed to validate work unit execution name: %w (%v)", grpcerr.ErrInternal, err)
+	}
+	if statusMsgErr := h.updateWorkUnitExecutionStatusMessage(ctx, xid, wid, eid, &msgpb.StructuredMessage{
+		UserFacingText: "Work unit was created but could not be scheduled for execution. Please restart the work unit.",
+		Severity:       msgpb.StructuredMessage_FATAL,
+		Source:         msgpb.StructuredMessage_XMANAGER_BACKEND,
+	}, false); statusMsgErr != nil {
+		logging.Error(ctx, "Failed to update work unit execution status message after failed create attempt", "error", statusMsgErr)
 	}
 	return nil
 }

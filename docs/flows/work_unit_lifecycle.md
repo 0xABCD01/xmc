@@ -147,10 +147,9 @@ Step 2 runs right after authentication and the parent name check, before the exp
 or the payload is validated, so callers other than the study controller get `PERMISSION_DENIED`
 and learn nothing else. Unlike step 6 of `CreateWorkUnit`, the experiment priority comes from the
 read in step 3, and the experiment is not read again. Step 5 assigns the IDs `next .. next+N-1`
-from a single next-ID read. Steps 6 and 7 run for one work unit after another. If either fails, the
-RPC returns `INTERNAL` naming that work unit at once, and the work units after it are not scheduled.
-The trials are already stored, so the controller must not create them again when it retries; ESS
-does not deduplicate batches.
+from a single next-ID read. If step 6 or 7 fails for some work units, they get a `FATAL` status
+message and the RPC returns `INTERNAL` naming them. The trials are already stored, so the
+controller must not create them again when it retries; ESS does not deduplicate batches.
 
 ---
 

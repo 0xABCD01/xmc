@@ -250,12 +250,13 @@ func TestBatchCreateWorkUnits_ErrorsHideAuthorizationDetails(t *testing.T) {
 	}
 }
 
-func TestBatchCreateWorkUnits_SchedulingFailureStopsAtFirstFailure(t *testing.T) {
+func TestBatchCreateWorkUnits_PartialSchedulingFailure(t *testing.T) {
 	tests := []struct {
-		name       string
-		mutate     func(st *batchStorage, actuator *tq.FakeClient)
-		wantTasks  int
-		wantFailed string
+		name        string
+		mutate      func(st *batchStorage, actuator *tq.FakeClient)
+		wantTasks   int
+		wantFailed  string
+		wantStopped int
 	}{
 		{
 			name: "enqueue fails for one work unit",
@@ -267,21 +268,21 @@ func TestBatchCreateWorkUnits_SchedulingFailureStopsAtFirstFailure(t *testing.T)
 					return nil
 				}
 			},
-			wantTasks: 2, wantFailed: "experiments/123/workUnits/5",
+			wantTasks: 3, wantFailed: "1 of 3 work units", wantStopped: 1,
 		},
 		{
 			name: "operation fails for one work unit",
 			mutate: func(st *batchStorage, _ *tq.FakeClient) {
-				st.operationErrs = map[string]error{"experiments/123/workUnits/5": errors.New("operation write failed")}
+				st.operationErrs = map[string]error{"experiments/123/workUnits/6": errors.New("operation write failed")}
 			},
-			wantTasks: 1, wantFailed: "experiments/123/workUnits/5",
+			wantTasks: 2, wantFailed: "experiments/123/workUnits/6", wantStopped: 0,
 		},
 		{
 			name: "created work unit name cannot be parsed",
 			mutate: func(st *batchStorage, _ *tq.FakeClient) {
 				st.NextWorkUnitID = -5
 			},
-			wantTasks: 0, wantFailed: "experiments/123/workUnits/-5",
+			wantTasks: 0, wantFailed: "3 of 3 work units were created but could not be scheduled, restart them: experiments/123/workUnits/-5", wantStopped: 0,
 		},
 	}
 	for _, tt := range tests {
@@ -298,6 +299,46 @@ func TestBatchCreateWorkUnits_SchedulingFailureStopsAtFirstFailure(t *testing.T)
 			}
 			if len(actuator.EnqueuedTasks) != tt.wantTasks {
 				t.Errorf("enqueued tasks = %d, want %d", len(actuator.EnqueuedTasks), tt.wantTasks)
+			}
+			if st.UpdateWorkUnitOperationCalls != tt.wantStopped {
+				t.Errorf("stopped operations = %d, want %d", st.UpdateWorkUnitOperationCalls, tt.wantStopped)
+			}
+		})
+	}
+}
+
+func TestFailCreatedWorkUnit_UnknownIDSkipsStatusUpdate(t *testing.T) {
+	tests := []struct {
+		name        string
+		operation   *lropb.Operation
+		wantStopped int
+	}{
+		{name: "without operation", wantStopped: 0},
+		{name: "with operation", operation: &lropb.Operation{Name: validator.ConstructOperationName(123, 4, "00000004-0000-0000-0000-000000000000")}, wantStopped: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newBatchStorage("test@example.com")
+			server := newBatchServer(t, st, &tq.FakeClient{})
+			// The execution name parses, so only the unknown ID (0) prevents a status update.
+			cwu := createdWorkUnit{
+				wu: &msgpb.WorkUnit{
+					Name:                     "experiments/123/workUnits/invalid",
+					CurrentWorkUnitExecution: &msgpb.WorkUnitExecution{Name: validator.ConstructWorkUnitExecutionName(123, 4, 1)},
+				},
+				operation: tt.operation,
+			}
+
+			got := server.WorkUnitHandler.failCreatedWorkUnit(context.Background(), 123, cwu, errors.New("name does not parse"))
+
+			if got != "experiments/123/workUnits/invalid" {
+				t.Errorf("failCreatedWorkUnit() = %q, want the work unit name", got)
+			}
+			if st.txCalls != 0 {
+				t.Errorf("status update transactions = %d, want 0 for a work unit without an ID", st.txCalls)
+			}
+			if st.UpdateWorkUnitOperationCalls != tt.wantStopped {
+				t.Errorf("stopped operations = %d, want %d", st.UpdateWorkUnitOperationCalls, tt.wantStopped)
 			}
 		})
 	}

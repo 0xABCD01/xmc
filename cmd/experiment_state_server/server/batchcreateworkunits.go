@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	lropb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -140,32 +142,70 @@ func batchCreateError(err error) error {
 	return fmt.Errorf("failed to batch create work units: %v: %w", err, grpcerr.ErrInternal)
 }
 
-// actuateCreatedWorkUnits records a creation operation for each created work unit and enqueues its
-// creation task, in order. It stops at the first failure and returns it as Internal; the work units
-// are already stored.
+// actuateCreatedWorkUnits records a creation operation for each created work unit and enqueues
+// their creation tasks. A work unit whose operation or task cannot be created gets a FATAL status
+// message, like in CreateWorkUnit, and is named in the returned Internal error.
 func (h *WorkUnitHandler) actuateCreatedWorkUnits(ctx context.Context, xid int64, priority msgpb.Priority, created []*msgpb.WorkUnit, email string) error {
+	var failed []string
+	var queued []createdWorkUnit
 	for _, wu := range created {
-		if err := h.actuateCreatedWorkUnit(ctx, xid, priority, wu, email); err != nil {
-			logging.Error(ctx, "Failed to schedule created work unit", "name", wu.GetName(), "error", err)
-			return fmt.Errorf("work unit %s was created but could not be scheduled: %v: %w", wu.GetName(), err, grpcerr.ErrInternal)
+		cwu, err := h.addCreateOperation(ctx, xid, wu, email)
+		if err != nil {
+			failed = append(failed, h.failCreatedWorkUnit(ctx, xid, cwu, err))
+			continue
 		}
+		queued = append(queued, cwu)
+	}
+	for _, cwu := range queued {
+		err := h.actuator.EnqueueWorkUnitTask(ctx, cwu.wu.GetCurrentWorkUnitExecution().GetName(), cwu.wu, client.CreateAction(priority, email), cwu.operation.GetName())
+		if err != nil {
+			failed = append(failed, h.failCreatedWorkUnit(ctx, xid, cwu, err))
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%d of %d work units were created but could not be scheduled, restart them: %s: %w", len(failed), len(created), strings.Join(failed, ", "), grpcerr.ErrInternal)
 	}
 	return nil
 }
 
-// actuateCreatedWorkUnit records the creation operation of wu and enqueues its creation task.
-func (h *WorkUnitHandler) actuateCreatedWorkUnit(ctx context.Context, xid int64, priority msgpb.Priority, wu *msgpb.WorkUnit, email string) error {
+// createdWorkUnit is a created work unit with its ID and creation operation, if any.
+type createdWorkUnit struct {
+	wu        *msgpb.WorkUnit
+	wid       int64
+	operation *lropb.Operation
+}
+
+// addCreateOperation records the creation operation of wu.
+func (h *WorkUnitHandler) addCreateOperation(ctx context.Context, xid int64, wu *msgpb.WorkUnit, email string) (createdWorkUnit, error) {
+	cwu := createdWorkUnit{wu: wu}
 	_, wid, err := validator.ValidateWorkUnitName(wu.GetName())
 	if err != nil {
-		return fmt.Errorf("failed to validate work unit name: %w", err)
+		return cwu, fmt.Errorf("failed to validate work unit name: %w", err)
 	}
+	cwu.wid = wid
 	operation, err := h.storage.AddWorkUnitOperation(ctx, xid, wid, &msgpb.OperationMetadata{
 		Target:            wu.GetName(),
 		ActionType:        msgpb.OperationMetadata_CREATE,
 		OriginalRequester: email,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to add work unit operation: %w", err)
+		return cwu, fmt.Errorf("failed to add work unit operation: %w", err)
 	}
-	return h.actuator.EnqueueWorkUnitTask(ctx, wu.GetCurrentWorkUnitExecution().GetName(), wu, client.CreateAction(priority, email), operation.GetName())
+	cwu.operation = operation
+	return cwu, nil
+}
+
+// failCreatedWorkUnit marks a created work unit that cannot be scheduled because of cause when its
+// ID is known, stops its operation when it has one, and returns its name.
+func (h *WorkUnitHandler) failCreatedWorkUnit(ctx context.Context, xid int64, cwu createdWorkUnit, cause error) string {
+	logging.Error(ctx, "Failed to schedule created work unit", "name", cwu.wu.GetName(), "error", cause)
+	if cwu.wid != 0 {
+		if err := h.markWorkUnitUnschedulable(ctx, xid, cwu.wid, cwu.wu); err != nil {
+			logging.Error(ctx, "Failed to mark work unit unschedulable", "name", cwu.wu.GetName(), "error", err)
+		}
+	}
+	if cwu.operation != nil {
+		h.stopOperationOnError(ctx, cwu.operation, fmt.Errorf("failed to enqueue work unit for scheduling: %v: %w", cause, grpcerr.ErrInternal))
+	}
+	return cwu.wu.GetName()
 }
