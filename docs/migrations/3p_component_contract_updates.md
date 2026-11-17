@@ -159,7 +159,7 @@ Check all four consumer invariants when modifying a resolver or client:
 
 1. **SQL / Protobuf Schemas**: If the ClickHouse storage or ingestion contract changed, update [`deploy/clickhouse/schema.sql`](../../deploy/clickhouse/schema.sql) and [`deploy/clickhouse/schema_test.py`](../../deploy/clickhouse/schema_test.py) (keeping `xmc_metrics_mv` and `xmc_metrics_pubsub_mv` projections identical!).
 2. **Dev/CI Reference Addons**: Update [`deploy/addons/metrics/manifests/metrics-addons.yaml`](../../deploy/addons/metrics/manifests/metrics-addons.yaml), [`deploy/addons/metrics/clickhouse/values.yaml`](../../deploy/addons/metrics/clickhouse/values.yaml), and [`deploy/addons/metrics/setup_metrics_addons.sh`](../../deploy/addons/metrics/setup_metrics_addons.sh) so CI and manual deployment tests run a compatible upstream version.
-3. **Migration CLI (when applicable)**: If `prepare` in [`tools/migrations/components/`](../../docs/migrations/components.md) synthesizes `profile-values.yaml` for the touched component, verify generated keys still conform to `values.schema.json`.
+3. **Migration CLI (when applicable)**: If `prepare` in [`tools/migrations/components/`](../../tools/migrations/components/) (see [`docs/migrations/components.md`](components.md)) synthesizes `profile-values.yaml` for the touched component, verify generated keys still conform to `values.schema.json`.
 4. **Documentation**: Synchronize [`deploy/profiles/stable-2026a/components/<name>/README.md`](../../deploy/profiles/stable-2026a/components/clickhouse/README.md) and [`deploy/profiles/stable-2026a/README.md`](../../deploy/profiles/stable-2026a/README.md) in the same PR.
 
 ---
@@ -244,7 +244,7 @@ When validating on a live GKE cluster (via `tools/dev_env/dev_env.py gke-upgrade
    - `dashboard-service` decides **at pod startup** whether `Component/clickhouse` (or `Component/bigquery`) is enabled (`COMPONENT_STATE_DISABLED` counts as disabled).
    - If `Component/clickhouse` is enabled for the **first time** after `dashboard-service` is already running, wait for `xmc-bridge` to mark it `Ready=True` and restart `dashboard-service` once:
      ```bash
-     kubectl wait component.xmc.dev/clickhouse -n xmc --for=condition=Ready --timeout=120s
+     kubectl wait components.xmc.dev/clickhouse -n xmc --for=condition=Ready --timeout=120s
      kubectl rollout restart deployment/dashboard-service-deployment -n xmc
      ```
    - Subsequent updates to `Component/clickhouse` `spec.parameters` or `Secret/clickhouse-secret` hot-swap automatically within ~10–15 seconds via `/readyz` (`OptionsFingerprint`) with **zero pod restarts**.
