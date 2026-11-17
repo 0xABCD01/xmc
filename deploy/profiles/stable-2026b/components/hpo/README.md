@@ -83,7 +83,7 @@ Each delivered tick is classified by outcome (`xmc_study_controller_reconcile_ti
 
 The controller re-creates the consumer group when Redis loses it, for example after a restart without persistence.
 
-The Experiment State Server publishes one tick when it creates a `STUDY` experiment; see [Create Experiment](../../../../../docs/flows/experiment_lifecycle.md#1-create-experiment).
+The Experiment State Server publishes one tick when it creates a `STUDY` experiment; see [Create Experiment](../../../../../docs/flows/experiment_lifecycle.md#1-create-experiment) and [Study Lifecycle](../../../../../docs/flows/study_lifecycle.md) for the end-to-end architecture and tick-processing diagrams.
 
 - **Metrics**: `GET /metrics` exposes `xmc_study_controller_reconcile_ticks_total{outcome="reconciled|contended|retry_error|invalid_payload"}`.
 - **Troubleshooting**: to inspect dead-lettered ticks and the reason each was rejected, run `XRANGE xmc-study-reconcile-dlq-stream - +` in `redis-cli`.

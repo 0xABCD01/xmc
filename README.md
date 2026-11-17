@@ -74,7 +74,7 @@ Metrics streaming and Managed XProf are optional and off by default. Enable metr
 
 ### Architecture
 - [Architecture Overview](docs/architecture/overview.md): control, execution, telemetry, and component planes, followed by [Component Reference](docs/architecture/components.md), [Execution Model](docs/architecture/execution_model.md), and [Use Cases](docs/architecture/use_cases.md).
-- [Main Flows](docs/flows/README.md): sequence walkthroughs for [experiment lifecycle](docs/flows/experiment_lifecycle.md), [work unit actuation](docs/flows/work_unit_lifecycle.md), [reconciliation](docs/flows/reconciliation.md), and [metrics & observability](docs/flows/metrics_and_observability.md).
+- [Main Flows](docs/flows/README.md): sequence walkthroughs for [experiment lifecycle](docs/flows/experiment_lifecycle.md), [study lifecycle](docs/flows/study_lifecycle.md), [work unit actuation](docs/flows/work_unit_lifecycle.md), [reconciliation](docs/flows/reconciliation.md), and [metrics & observability](docs/flows/metrics_and_observability.md).
 - [Deployment Topologies](docs/design/topologies.md) and [Gateway Routing Design](docs/design/gateway.md): Cluster Toolkit Blueprint v1 vs v2 layouts, Kubernetes Gateway API routing, OAuth2 session handling, and identity mappings.
 
 ### Contributing

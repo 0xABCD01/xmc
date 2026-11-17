@@ -102,7 +102,8 @@ Controller ([`cmd/study_controller`](../../cmd/study_controller)) consumes the s
 asynchronously as the `study-controller-group` consumer group under a per-study Redis lease lock
 (`xmc:study-reconcile-lock:{xid}`), acknowledging contended duplicate ticks without reconciling; a
 payload that does not name a valid experiment goes to the `xmc-study-reconcile-dlq-stream`
-dead-letter stream.
+dead-letter stream; see [Study Lifecycle](study_lifecycle.md) for the end-to-end topology and
+per-tick flow.
 Each submission enqueues one tick (delivered at least once); periodic ticks are not implemented yet.
 
 Domain rules for assembling the experiment — defaults, derived fields, validation — live in
