@@ -31,6 +31,7 @@ import dataclasses
 import functools
 import json
 import os
+import shutil
 import socket
 import sys
 import tempfile
@@ -315,26 +316,103 @@ def _read_diff_cover_report(report_path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _resolve_diff_cover_bin() -> str:
+    """Resolves the diff-cover executable from the active Python venv or PATH."""
+    venv_bin = Path(sys.executable).parent / "diff-cover"
+    if venv_bin.is_file() and os.access(venv_bin, os.X_OK):
+        return str(venv_bin)
+    return shutil.which("diff-cover") or "diff-cover"
+
+
+def resolve_bazel_lcov_path(
+    extra_flags: Sequence[str] = (),
+    env: Mapping[str, str] = os.environ,
+) -> Path:
+    """Resolves `<bazel output_path>/_coverage/_coverage_report.dat` via `bazel info`."""
+    cache_flags = [f for f in extra_flags if f.startswith("--repository_cache=")]
+    try:
+        proc = run_command(
+            ["bazel", "info", *cache_flags, "output_path"],
+            env=dict(env),
+            capture_output=True,
+            check=False,
+            log_cmd=False,
+            cwd=_REPO_ROOT,
+            errors="replace",
+        )
+    except FileNotFoundError:
+        return DEFAULT_LCOV_PATH
+    output_path = proc.stdout.strip() if proc.returncode == 0 else ""
+    if output_path:
+        return Path(output_path) / "_coverage" / "_coverage_report.dat"
+    return DEFAULT_LCOV_PATH
+
+
+def _raise_for_diff_cover_failure(
+    returncode: int,
+    compare_branch: str,
+    fail_under: int,
+    summary: Mapping[str, Any],
+) -> None:
+    """Raises HandledError distinguishing operational failures from coverage shortfalls."""
+    if not summary:
+        raise HandledError(
+            f"diff-cover exited with code {returncode} without producing a report "
+            f"against {compare_branch}.",
+            "Inspect diff-cover stderr for git/ref or LCOV parsing errors "
+            "(e.g., run `git fetch origin`).",
+            details={
+                "compare_branch": compare_branch,
+                "fail_under": fail_under,
+                "exit_code": returncode,
+            },
+        )
+    raise HandledError(
+        f"diff-cover failed (exit code {returncode}): diff coverage is below "
+        f"{fail_under}% against {compare_branch}.",
+        "Add unit tests covering the uncovered diff lines shown on stderr and in "
+        "details['diff_cover'], then re-run python3 ./tools/run_affected_tests.py --coverage.",
+        details={
+            "compare_branch": compare_branch,
+            "fail_under": fail_under,
+            "diff_cover": dict(summary),
+        },
+    )
+
+
 def run_diff_cover(
     compare_branch: str,
     fail_under: int,
     env: Mapping[str, str],
-    lcov_path: Path = DEFAULT_LCOV_PATH,
+    lcov_path: Path | None = None,
 ) -> dict[str, Any]:
     """Evaluates LCOV diff coverage against compare_branch via diff-cover.
 
     Raises:
-        HandledError: If diff-cover is missing or diff coverage is below fail_under.
+        HandledError: If fail_under is out of bounds, LCOV is missing/empty, diff-cover is
+            missing, or diff coverage is below fail_under.
     """
-    if fail_under <= 0:
+    if not 0 <= fail_under <= 100:
+        raise HandledError(
+            f"--diff-cover-fail-under must be between 0 and 100 (got {fail_under}).",
+            "Pass an integer percentage between 0 and 100 (or 0 to skip diff-cover).",
+            details={"fail_under": fail_under},
+        )
+    if fail_under == 0:
         return {"skipped": True, "reason": "disabled via --diff-cover-fail-under=0"}
-    if not lcov_path.exists() or lcov_path.stat().st_size == 0:
-        return {"skipped": True, "reason": f"no LCOV report at {lcov_path}"}
+    resolved_lcov = lcov_path if lcov_path is not None else resolve_bazel_lcov_path((), env)
+    if not resolved_lcov.is_file() or resolved_lcov.stat().st_size == 0:
+        raise HandledError(
+            f"Expected non-empty LCOV coverage report at {resolved_lcov}, but none was generated.",
+            "Verify that the selected test targets belong to packages matching "
+            "--instrumentation_filter in .bazelrc and that `bazel coverage` completed cleanly.",
+            details={"lcov_path": str(resolved_lcov), "compare_branch": compare_branch},
+        )
     with tempfile.TemporaryDirectory(prefix="diff_cover_") as tmp_dir:
         report_path = Path(tmp_dir) / "diff_cover.json"
         cmd = [
-            "diff-cover",
-            str(lcov_path),
+            _resolve_diff_cover_bin(),
+            str(resolved_lcov),
             f"--compare-branch={compare_branch}",
             f"--fail-under={fail_under}",
             f"--json-report={report_path}",
@@ -344,21 +422,11 @@ def run_diff_cover(
         except FileNotFoundError as e:
             raise HandledError(
                 "`diff-cover` is not installed or not on PATH.",
-                "Install diff-cover (`pip install 'diff-cover>=9.2.0'`) and re-run.",
+                "Install diff-cover (`pip install 'diff-cover==9.2.0'`) and re-run.",
             ) from e
         summary = _read_diff_cover_report(report_path)
     if proc.returncode != 0:
-        raise HandledError(
-            f"diff-cover failed (exit code {proc.returncode}): diff coverage is below "
-            f"{fail_under}% against {compare_branch}.",
-            "Add unit tests covering the uncovered diff lines shown on stderr and in "
-            "details['diff_cover'], then re-run python3 ./tools/run_affected_tests.py --coverage.",
-            details={
-                "compare_branch": compare_branch,
-                "fail_under": fail_under,
-                "diff_cover": summary,
-            },
-        )
+        _raise_for_diff_cover_failure(proc.returncode, compare_branch, fail_under, summary)
     return {"compare_branch": compare_branch, "fail_under": fail_under, "report": summary}
 
 
@@ -401,7 +469,10 @@ def run_affected_tests(args: argparse.Namespace, env: Mapping[str, str]) -> dict
     result = report | {"passed_targets": list(outcome.passed_targets)}
     if args.coverage:
         branch = resolve_compare_branch(args, env)
-        result["diff_cover"] = run_diff_cover(branch, args.diff_cover_fail_under, env)
+        lcov_path = resolve_bazel_lcov_path(flags, env)
+        result["diff_cover"] = run_diff_cover(
+            branch, args.diff_cover_fail_under, env, lcov_path=lcov_path
+        )
     return result
 
 
