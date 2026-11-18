@@ -296,6 +296,9 @@ queues:
           nvidia.com/gpu: "100000000"
           cpu: "100000000"
           memory: "100000000Gi"
+  # A cluster with no TPU node pools can set this false to omit the TPU queue.
+  tpu:
+    enabled: true
 
 # Pass configuration to Kueue sub-chart
 kueue:
