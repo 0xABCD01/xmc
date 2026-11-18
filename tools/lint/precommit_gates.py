@@ -20,13 +20,15 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+COMMON_EXCLUDES = frozenset({".git", "node_modules", ".angular", "venv", ".venv", "ctk-out"})
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,14 @@ class RunContext:
         print(f"❌ {message}")
         self.failed = True
 
+    def warn_missing(self, warning: str, hint: str = "") -> None:
+        """Prints a missing-tool warning and fails when running in `check` mode."""
+        print(f"--> WARNING: {warning}")
+        if hint:
+            print(f"   {hint}")
+        if self.mode == "check":
+            self.failed = True
+
 
 def exec_cmd(
     cmd: Sequence[str],
@@ -101,11 +111,13 @@ def exec_cmd(
     capture: bool = False,
     quiet_out: bool = False,
     quiet_err: bool = False,
+    errors: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Executes `cmd` cleanly, returning returncode `127` on `OSError`."""
     out = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet_out else None)
     err = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet_err else None)
     cmd_list = list(cmd)
+    text_errors = errors if errors is not None else ("surrogateescape" if capture else None)
     try:
         return subprocess.run(
             cmd_list,
@@ -114,6 +126,7 @@ def exec_cmd(
             stdout=out,
             stderr=err,
             text=True,
+            errors=text_errors,
             check=False,
         )
     except OSError as exc:
@@ -124,22 +137,138 @@ def exec_cmd(
 
 def git_staged_paths(diff_filter: str, *, no_renames: bool = False) -> list[str]:
     """Lists staged paths matching `diff_filter`, exiting 1 if git fails."""
-    cmd = ["git", "-c", "core.quotePath=false", "diff", "--cached", "--name-only"]
+    cmd = ["git", "diff", "--cached", "--name-only", "-z"]
     if no_renames:
         cmd.append("--no-renames")
-    res = exec_cmd([*cmd, f"--diff-filter={diff_filter}"], cwd=REPO_ROOT, capture=True)
+    res = exec_cmd(
+        [*cmd, f"--diff-filter={diff_filter}"],
+        cwd=REPO_ROOT,
+        capture=True,
+        errors="surrogateescape",
+    )
     if res.returncode != 0:
         print("❌ git diff --cached failed; cannot select pre-commit checks.", file=sys.stderr)
         if res.stderr:
             print(res.stderr.strip(), file=sys.stderr)
         raise SystemExit(1)
-    return [line for line in res.stdout.splitlines() if line]
+    return [path for path in res.stdout.split("\0") if path]
 
 
 def staged_paths_match(diff_filter: str, pattern: str) -> bool:
     """Returns True when any staged path in `diff_filter` matches regex `pattern`."""
     regex = re.compile(pattern)
     return any(regex.search(path) for path in git_staged_paths(diff_filter, no_renames=True))
+
+
+def walk_repo_files(
+    roots: Sequence[str],
+    *,
+    suffixes: Sequence[str] = (),
+    excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
+    base_dir: Path = REPO_ROOT,
+) -> list[str]:
+    """Walks `roots` relative to `base_dir` and returns sorted unique matching paths."""
+    matched: set[str] = set()
+    suffix_tuple = tuple(suffixes)
+    for root in roots:
+        root_path = base_dir if root == "." else base_dir / root
+        if not root_path.exists():
+            continue
+        for dirpath, dirnames, filenames in os.walk(root_path):
+            dirnames[:] = sorted(d for d in dirnames if d not in excluded_dirs)
+            matched.update(
+                Path(dirpath, name).relative_to(base_dir).as_posix()
+                for name in filenames
+                if not suffix_tuple or name.endswith(suffix_tuple)
+            )
+    return sorted(matched)
+
+
+def collect_target_files(
+    mode: str,
+    *,
+    staged_regex: str,
+    roots: Sequence[str] = (".",),
+    suffixes: Sequence[str] = (),
+    excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
+    base_dir: Path = REPO_ROOT,
+) -> list[str]:
+    """Collects repo files under `roots` in `check` mode or staged `ACM` files in `fix` mode."""
+    if mode == "check":
+        return walk_repo_files(
+            roots, suffixes=suffixes, excluded_dirs=excluded_dirs, base_dir=base_dir
+        )
+    if not roots:
+        return []
+    staged = git_staged_paths("ACM", no_renames=True)
+    normalized_roots = tuple(
+        PurePosixPath(r.replace(os.sep, "/")).as_posix().rstrip("/") if r else "" for r in roots
+    )
+    if "." not in normalized_roots:
+        staged = [
+            path
+            for path in staged
+            if any(path == root or path.startswith(f"{root}/") for root in normalized_roots if root)
+        ]
+    regex = re.compile(staged_regex)
+    return [path for path in staged if regex.search(path)]
+
+
+def should_run_scope(
+    mode: str,
+    *,
+    roots: Sequence[str],
+    suffixes: Sequence[str],
+    fix_pattern: str,
+    base_dir: Path = REPO_ROOT,
+) -> bool:
+    """Returns True when `roots` contain files in `check` mode or `AMD` paths match `fix_pattern`."""
+    if mode == "check":
+        return bool(walk_repo_files(roots, suffixes=suffixes, base_dir=base_dir))
+    return staged_paths_match("AMD", fix_pattern)
+
+
+def docker_prefix(image: str, mount: str, *, entrypoint: str | None = None) -> list[str]:
+    """Builds a `docker run --rm` command prefix mounting `REPO_ROOT` at `mount`."""
+    cmd = ["docker", "run", "--rm", "-v", f"{REPO_ROOT}:{mount}", "-w", mount]
+    if entrypoint is not None:
+        cmd.extend(["--entrypoint", entrypoint])
+    return [*cmd, image]
+
+
+def resolve_local_or_docker(
+    ctx: RunContext,
+    tool: str,
+    *,
+    docker_image: str,
+    mount: str,
+    missing_label: str,
+    entrypoint: str | None = None,
+) -> tuple[list[str], bool] | None:
+    """Returns `(cmd_prefix, is_docker)` for `tool`, falling back to `docker_image` or None."""
+    if local := shutil.which(tool):
+        return [local], False
+    if shutil.which("docker"):
+        return docker_prefix(docker_image, mount, entrypoint=entrypoint), True
+    ctx.warn_missing(f"{tool} or docker not found. {missing_label}")
+    return None
+
+
+def run_mode_command(
+    ctx: RunContext,
+    cmd_base: Sequence[str],
+    *,
+    check_args: Sequence[str],
+    fix_args: Sequence[str],
+    failure_msg: str,
+    ignore_fix_error: bool = False,
+    cwd: str | Path | None = None,
+) -> None:
+    """Runs `cmd_base` with `check_args` or `fix_args` and records failures."""
+    args = check_args if ctx.mode == "check" else fix_args
+    res = exec_cmd([*cmd_base, *args], cwd=cwd)
+    if res.returncode != 0 and (ctx.mode == "check" or not ignore_fix_error):
+        ctx.fail(failure_msg)
 
 
 def _update_baseline(ctx: RunContext, gate: PythonGate) -> None:
