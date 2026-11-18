@@ -139,6 +139,38 @@ test('run skips absent reviewers and logs warnings for malformed ABSENCE_LIST en
     assert.deepStrictEqual(requestedReviewers, ['charlie']);
     assert.strictEqual(warnings.length, 1);
     assert.ok(warnings[0].includes('after end date'));
+
+    // When ABSENCE_LIST is unset or empty, logs info and treats all non-author owners as eligible
+    delete process.env.ABSENCE_LIST;
+    const infoLogs = [];
+    await run({
+      github: {
+        rest: {
+          pulls: {
+            requestReviewers: async () => {}
+          }
+        }
+      },
+      context: {
+        repo: { owner: 'google', repo: 'xmc' },
+        eventName: 'pull_request',
+        payload: {
+          pull_request: {
+            number: 1,
+            state: 'open',
+            user: { login: 'alice' },
+            requested_reviewers: [],
+            requested_teams: []
+          }
+        }
+      },
+      core: {
+        info: msg => infoLogs.push(msg),
+        warning: () => {},
+        setFailed: msg => assert.fail(`Unexpected setFailed: ${msg}`)
+      }
+    });
+    assert.ok(infoLogs.includes('ABSENCE_LIST is unset or empty; no reviewers marked absent.'));
   } finally {
     if (origAbsenceList === undefined) {
       delete process.env.ABSENCE_LIST;

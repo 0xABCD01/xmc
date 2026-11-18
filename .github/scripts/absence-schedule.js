@@ -156,26 +156,10 @@ function parseAbsenceFile(content, currentDate = new Date()) {
   return { absentUsers, errors };
 }
 
-/**
- * Pure function: Validates the contents of ABSENCE_LIST, checking that every non-empty
- * non-comment entry is either "NICK" or "NICK DD.MM.YYYY-DD.MM.YYYY" with valid
- * calendar dates and start <= end.
- * @param {string} content - Raw ABSENCE_LIST content.
- * @returns {{ valid: boolean, reason?: string }}
- */
-function validateAbsenceContent(content) {
-  if (typeof content !== 'string') {
-    return { valid: false, reason: 'ABSENCE_LIST content is missing or not a string' };
-  }
-  const { errors } = parseAbsenceFile(content);
-  return errors.length > 0 ? { valid: false, reason: errors[0] } : { valid: true };
-}
-
 module.exports = {
   USERNAME_PATTERN,
   parseDdMmYyyy,
   parseAbsenceDateRange,
   parseAbsenceLine,
-  parseAbsenceFile,
-  validateAbsenceContent
+  parseAbsenceFile
 };

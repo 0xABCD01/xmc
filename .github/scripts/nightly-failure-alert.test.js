@@ -701,6 +701,66 @@ describe('run orchestrator', () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test('reads process.env.ABSENCE_LIST when absenceContent is omitted', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-env-test-'));
+    const ownersFile = path.join(tempDir, 'OWNERS');
+
+    fs.writeFileSync(ownersFile, 'Alice\nBob\nCharlie\n');
+
+    const origAbsenceList = process.env.ABSENCE_LIST;
+    let createdIssue = null;
+    const mockGithub = {
+      rest: {
+        repos: {
+          listPullRequestsAssociatedWithCommit: async () => ({ data: [] }),
+        },
+        issues: {
+          listForRepo: async () => ({ data: [] }),
+          create: async (payload) => {
+            createdIssue = payload;
+            return { data: { number: 44 } };
+          },
+          createComment: async () => assert.fail('Should not create comment when no issue exists'),
+        },
+      },
+    };
+
+    const mockContext = {
+      repo: { owner: 'google', repo: 'xmc' },
+      runId: 1000,
+      sha: 'aabbccdd11223344556677889900aabbccddeeff',
+      ref: 'refs/heads/main',
+      eventName: 'schedule',
+    };
+
+    const mockCore = {
+      info: () => {},
+      warning: () => {},
+      setFailed: () => {},
+    };
+
+    try {
+      process.env.ABSENCE_LIST = 'Bob\n';
+      const result = await run({
+        github: mockGithub,
+        context: mockContext,
+        core: mockCore,
+        ownersPath: ownersFile,
+      });
+
+      assert.equal(result.status, 'issue_created');
+      assert.ok(createdIssue.body.includes('@Alice @Charlie'));
+      assert.ok(!createdIssue.body.includes('@Bob'));
+    } finally {
+      if (origAbsenceList === undefined) {
+        delete process.env.ABSENCE_LIST;
+      } else {
+        process.env.ABSENCE_LIST = origAbsenceList;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('resolveTriggerOutcome', () => {

@@ -63,6 +63,8 @@ async function run({ github, context, core }) {
       core.warning(`Invalid ABSENCE_LIST entry ignored: ${err}`);
     }
     core.info(`Parsed absent reviewers from ABSENCE_LIST: ${absentUsers.join(', ')}`);
+  } else {
+    core.info('ABSENCE_LIST is unset or empty; no reviewers marked absent.');
   }
 
   const candidates = filterEligibleReviewers(rawReviewers, prAuthor, absentUsers);

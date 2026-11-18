@@ -44,17 +44,12 @@ function filterActiveOwners(owners = [], absences = []) {
 /**
  * Reads OWNERS and resolves active owners by filtering out absent users from ABSENCE_LIST content.
  * @param {string} ownersPath
- * @param {string} [absenceContent=process.env.ABSENCE_LIST || '']
- * @param {any} core
+ * @param {string} absenceContent
+ * @param {any} [core=null]
  * @param {Date} [currentDate=new Date()]
  * @returns {string[]} Active owner usernames.
  */
-function resolveActiveOwners(
-  ownersPath,
-  absenceContent = process.env.ABSENCE_LIST || '',
-  core,
-  currentDate = new Date()
-) {
+function resolveActiveOwners(ownersPath, absenceContent, core = null, currentDate = new Date()) {
   if (!fs.existsSync(ownersPath) && core) {
     core.warning(`Owners file not found at '${ownersPath}'.`);
   }

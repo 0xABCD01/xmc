@@ -41,8 +41,8 @@ graph TD
 | [`range-diff-parser.js`](range-diff-parser.js) | **Diff Parser**: Parses raw `git range-diff` output. Distinguishes code hunks from commit metadata/commit message hunks, computes added/deleted line deltas (tracking the test file subset), and extracts added commit SHAs. |
 | [`test-file-classifier.js`](test-file-classifier.js) | **Test File Classifier**: Identifies test files and fixtures whose line changes are excluded from the code owner grace budget. |
 | [`approval-policy.js`](approval-policy.js) | **Decision Engine**: Evaluates whether a PR qualifies for auto-reapproval (clean rebase vs code owner grace delta) and enforces protected file boundaries. |
-| [`assign-reviewers.js`](assign-reviewers.js) | **Reviewer Assignment**: Parses `OWNERS`, filters out absent reviewers configured in the `ABSENCE_LIST` repository variable (`vars.ABSENCE_LIST`), and assigns eligible reviewers to open pull requests. |
-| [`absence-schedule.js`](absence-schedule.js) | **Absence Schedule Parser**: Parses and validates unconditional (`NICK`) and date-ranged (`NICK DD.MM.YYYY-DD.MM.YYYY`) reviewer absence entries from `ABSENCE_LIST`. |
+| [`assign-reviewers.js`](assign-reviewers.js) | **Reviewer Assignment**: Parses `OWNERS`, filters out absent reviewers configured in the `ABSENCE_LIST` repository variable (`vars.ABSENCE_LIST` — **Settings → Secrets and variables → Actions → Variables** or `gh variable set ABSENCE_LIST`, requiring repository `write` / Actions Variables write access), and assigns eligible reviewers to open pull requests. |
+| [`absence-schedule.js`](absence-schedule.js) | **Absence Schedule Parser**: Parses unconditional (`NICK`) and inclusive UTC date-ranged (`NICK DD.MM.YYYY-DD.MM.YYYY`) reviewer absence entries from `ABSENCE_LIST` (entries separated by newlines, `,`, or `;`; `#` starts an end-of-line comment; optional leading `-`/`*`/`+`/`@` prefixes). Consumed by `assign-reviewers.js` and `nightly-failure-alert.js`; malformed entries emit a non-blocking `core.warning` and are ignored (user treated as available). |
 
 ---
 
