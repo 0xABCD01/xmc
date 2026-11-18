@@ -202,15 +202,24 @@ check_ui_selector_contract() {
 
 check_codeowners_alignment() {
   echo "--> Checking CODEOWNERS Alignment..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_codeowners_alignment.py; then
-    echo "❌ CODEOWNERS does not align with OWNERS."
+  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_codeowners_alignment.py >/dev/null; then
+    echo "❌ CODEOWNERS does not align with OWNERS (see JSON error above)."
     FAILED=1
   fi
 }
 
 check_profile_lock() {
   echo "--> Checking Component Profile Release Locks..."
+  local lock_ok=1
+  if [ "${MODE}" = "check" ]; then
+    if ! XMC_BYPASS_VENV=1 python3 tools/components/check_profile_lock.py >/dev/null; then
+      lock_ok=0
+    fi
+  fi
   if ! XMC_BYPASS_VENV=1 python3 tools/components/check_profile_lock.py --staged >/dev/null; then
+    lock_ok=0
+  fi
+  if [ "${lock_ok}" -eq 0 ]; then
     echo "❌ GA-locked component profile check failed (see JSON error above)."
     FAILED=1
   fi

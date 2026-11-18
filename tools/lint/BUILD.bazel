@@ -89,14 +89,29 @@ py_test(
     ],
 )
 
-py_test(
-    name = "check_codeowners_alignment_test",
+py_library(
+    name = "check_codeowners_alignment_lib",
     srcs = ["check_codeowners_alignment.py"],
     data = [
         "//:CODEOWNERS",
         "//:OWNERS",
     ],
-    main = "check_codeowners_alignment.py",
+    imports = ["../.."],
+    deps = ["//tools/common:tool_utils"],
+)
+
+py_test(
+    name = "check_codeowners_alignment_test",
+    srcs = ["check_codeowners_alignment_test.py"],
+    data = [
+        "//:CODEOWNERS",
+        "//:OWNERS",
+    ],
+    imports = ["../.."],
+    deps = [
+        ":check_codeowners_alignment_lib",
+        "//tools/common:tool_utils",
+    ],
 )
 
 py_library(

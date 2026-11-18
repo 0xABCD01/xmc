@@ -48,6 +48,10 @@ py_binary(
 py_test(
     name = "check_profile_lock_test",
     srcs = ["check_profile_lock_test.py"],
+    data = [
+        "//deploy/profiles:locked_profiles",
+        "//deploy/profiles/stable-2026a:rules",
+    ],
     imports = ["../.."],
     deps = [
         ":check_profile_lock_lib",
