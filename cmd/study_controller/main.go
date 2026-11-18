@@ -32,6 +32,7 @@ import (
 	"xmanager_cloud/cmd/study_controller/config"
 	"xmanager_cloud/cmd/study_controller/worker"
 	"xmanager_cloud/internal/logging"
+	"xmanager_cloud/internal/task_queue_redis/redisclient"
 )
 
 // HTTP server timeouts bound per-connection resource usage (e.g. slow-client attacks).
@@ -82,8 +83,19 @@ func listenAndServe(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on port %s: %w", cfg.Port, err)
 	}
-	client := worker.NewRedisConsumer(cfg.RedisAddr)
-	consumer := worker.Start(ctx, client)
+	return serveWithClient(ctx, lis, worker.NewRedisConsumer(cfg.RedisAddr))
+}
+
+func serveWithClient(ctx context.Context, lis net.Listener, client *redisclient.ConsumerClient) error {
+	handler, err := worker.NewRedisHandler(client)
+	if err != nil {
+		_ = lis.Close()
+		if client != nil && client.Client != nil {
+			_ = client.Close(context.WithoutCancel(ctx))
+		}
+		return fmt.Errorf("failed to create study reconcile handler: %w", err)
+	}
+	consumer := worker.Start(ctx, client, handler)
 	defer stopConsumer(ctx, consumer)
 	return serve(ctx, lis, newHTTPHandler(client))
 }

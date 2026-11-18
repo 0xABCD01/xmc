@@ -454,7 +454,29 @@ def get_staged_files(repo_root: Path) -> list[str]:
         log_on_error=False,
         handled_instruction="Ensure git is available and run from a valid repository checkout.",
     )
-    return sorted({entry for entry in res.stdout.split("\0") if entry})
+    staged = {entry for entry in res.stdout.split("\0") if entry}
+    if staged and _git_rev_exists(repo_root, "MERGE_HEAD"):
+        vs_merge = run_command(
+            [
+                "git",
+                "-c",
+                "core.quotePath=false",
+                "diff",
+                "--cached",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                "MERGE_HEAD",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            log_cmd=False,
+            log_on_error=False,
+            handled_instruction="Failed to compare staged index against MERGE_HEAD.",
+        )
+        staged &= {entry for entry in vs_merge.stdout.split("\0") if entry}
+    return sorted(staged)
 
 
 def _resolve_effective_base_ref(repo_root: Path, base_ref: str | None) -> str:

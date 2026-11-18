@@ -38,7 +38,7 @@ sequenceDiagram
     ESS-->>Client: 11. Experiment
     opt STUDY
         Note over Redis,SC: Asynchronously, after the RPC returns
-        Redis-->>SC: Reconcile tick (logged)
+        Redis-->>SC: Reconcile tick (per-study lease lock, logged)
     end
 ```
 
@@ -99,8 +99,11 @@ when the client cancels the RPC: when it fails, ESS logs the error, increments
 failing the RPC would make the client retry and create a duplicate study. Such a study is not
 reconciled until a future sweeper recovers it. `STANDARD` experiments enqueue nothing. The Study
 Controller ([`cmd/study_controller`](../../cmd/study_controller)) consumes the stream
-asynchronously as the `study-controller-group` consumer group and logs each tick; a payload that
-does not name a valid experiment goes to the `xmc-study-reconcile-dlq-stream` dead-letter stream.
+asynchronously as the `study-controller-group` consumer group under a per-study Redis lease lock
+(`xmc:study-reconcile-lock:{xid}`), acknowledging contended duplicate ticks without reconciling; a
+payload that does not name a valid experiment goes to the `xmc-study-reconcile-dlq-stream`
+dead-letter stream; see [Study Lifecycle](study_lifecycle.md) for the end-to-end topology and
+per-tick flow.
 Each submission enqueues one tick (delivered at least once); periodic ticks are not implemented yet.
 
 Domain rules for assembling the experiment — defaults, derived fields, validation — live in

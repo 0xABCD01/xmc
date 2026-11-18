@@ -320,6 +320,7 @@ declarations fail the build rather than a deployment.
 | [`internal/storage`](../../internal/storage) | Spanner data access, schema migrations, and the storage interfaces used by ESS, Actuator, Reconciler, Health Service, and Log Monitor. |
 | [`internal/task_queue`](../../internal/task_queue) | Builds, signs, and enqueues actuator payloads. Owns the idempotency key and JWT/OIDC signing scheme. |
 | [`internal/task_queue_redis`](../../internal/task_queue_redis) | Redis Streams publisher and consumer with consumer groups, retries, abandoned-message reclamation, and dead-lettering. |
+| [`internal/redislock`](../../internal/redislock) | Distributed Redis lease lock (`SET ... NX PX` with token-checked Lua release). |
 | [`internal/broadcast`](../../internal/broadcast) | Redis Streams broadcast publisher and consumer used to fan out scheduling pause and resume events (`xmc-pause-stream`) to Actuator replicas. |
 | [`internal/featureflags`](../../internal/featureflags) | Unified feature flag definitions (`XMC_PAUSE_SCHEDULING_ENABLED`) and environment-variable loading across services. |
 | [`internal/auth`](../../internal/auth) | Authentication context extraction and authorization decisions shared across services. |

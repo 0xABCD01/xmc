@@ -356,6 +356,27 @@ class GitIntegrationProfileLockTest(unittest.TestCase):
             res = check_profile_lock.check_profile_lock(self._parse_args("--staged"))
         self.assertEqual(res["overrides"], {"stable-2026a": "refresh digest"})
 
+    def test_staged_during_merge_ignores_clean_merge_head_changes(self) -> None:
+        self._git("checkout", "-b", "feat/unrelated")
+        self._write_file("README.md", "feature change\n")
+        self._git("add", "README.md")
+        self._git("commit", "-m", "docs: update readme")
+
+        self._git("checkout", "main")
+        self._write_file("deploy/profiles/stable-2026a/README.md", "upstream doc update\n")
+        self._git("add", "deploy/profiles/stable-2026a/README.md")
+        self._git("commit", "-m", "docs: upstream stable-2026a readme")
+
+        self._git("checkout", "feat/unrelated")
+        subprocess.run(
+            ["git", "merge", "--no-commit", "--no-ff", "main"],
+            cwd=self.repo_root,
+            check=True,
+            capture_output=True,
+        )
+        res = check_profile_lock.check_profile_lock(self._parse_args("--staged"))
+        self.assertEqual(res["changed_files_count"], 0)
+
     def test_branch_diff_locked_file_without_trailer_fails(self) -> None:
         self._git("checkout", "-b", "feat/edit-locked")
         self._git("rm", "deploy/profiles/stable-2026a/components/redpanda/values.yaml")

@@ -13,8 +13,7 @@
 // limitations under the License.
 
 const fs = require('fs');
-const { parseReviewersFromOwners } = require('./assign-reviewers');
-const { isAuthorCodeOwner } = require('./auto-approve-absence');
+const { parseReviewersFromOwners, isAuthorCodeOwner } = require('./assign-reviewers');
 const { parseRangeDiff } = require('./range-diff-parser');
 const {
   ensureGitRefs,

@@ -20,12 +20,22 @@ const path = require('path');
 const { parseAbsenceFile } = require('./absence-schedule');
 const {
   parseReviewersFromOwners,
+  isAuthorCodeOwner,
   filterEligibleReviewers,
   selectRandomReviewers,
   isPullRequestOpen,
   shouldSkipAssignment,
   run
 } = require('./assign-reviewers');
+
+test('isAuthorCodeOwner checks code owners list case-insensitively', () => {
+  const owners = ['alice', 'bob', 'charlie'];
+  assert.strictEqual(isAuthorCodeOwner('alice', owners), true);
+  assert.strictEqual(isAuthorCodeOwner('ALICE', owners), true);
+  assert.strictEqual(isAuthorCodeOwner('dave', owners), false);
+  assert.strictEqual(isAuthorCodeOwner('', owners), false);
+  assert.strictEqual(isAuthorCodeOwner('alice', null), false);
+});
 
 test('parseReviewersFromOwners parses flat text reviewers correctly and strips comments', () => {
   const sampleOwners = `
@@ -83,19 +93,17 @@ test('absent reviewers mapping handles markdown formatted lists (- , * , @)', ()
   assert.deepStrictEqual(result, ['charlie']);
 });
 
-test('run skips absent reviewers and logs warnings for malformed ABSENCE.md entries', async () => {
+test('run skips absent reviewers and logs warnings for malformed ABSENCE_LIST entries', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-assign-reviewers-'));
   const origCwd = process.cwd();
+  const origAbsenceList = process.env.ABSENCE_LIST;
   const warnings = [];
   let requestedReviewers = null;
 
   try {
     process.chdir(tempDir);
     fs.writeFileSync('OWNERS', 'alice\nbob\ncharlie\n');
-    fs.writeFileSync(
-      'ABSENCE.md',
-      'bob\ncharlie 16.11.2026-15.11.2026\n'
-    );
+    process.env.ABSENCE_LIST = 'bob\ncharlie 16.11.2026-15.11.2026\n';
 
     await run({
       github: {
@@ -131,7 +139,44 @@ test('run skips absent reviewers and logs warnings for malformed ABSENCE.md entr
     assert.deepStrictEqual(requestedReviewers, ['charlie']);
     assert.strictEqual(warnings.length, 1);
     assert.ok(warnings[0].includes('after end date'));
+
+    // When ABSENCE_LIST is unset or empty, logs info and treats all non-author owners as eligible
+    delete process.env.ABSENCE_LIST;
+    const infoLogs = [];
+    await run({
+      github: {
+        rest: {
+          pulls: {
+            requestReviewers: async () => {}
+          }
+        }
+      },
+      context: {
+        repo: { owner: 'google', repo: 'xmc' },
+        eventName: 'pull_request',
+        payload: {
+          pull_request: {
+            number: 1,
+            state: 'open',
+            user: { login: 'alice' },
+            requested_reviewers: [],
+            requested_teams: []
+          }
+        }
+      },
+      core: {
+        info: msg => infoLogs.push(msg),
+        warning: () => {},
+        setFailed: msg => assert.fail(`Unexpected setFailed: ${msg}`)
+      }
+    });
+    assert.ok(infoLogs.includes('ABSENCE_LIST is unset or empty; no reviewers marked absent.'));
   } finally {
+    if (origAbsenceList === undefined) {
+      delete process.env.ABSENCE_LIST;
+    } else {
+      process.env.ABSENCE_LIST = origAbsenceList;
+    }
     process.chdir(origCwd);
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

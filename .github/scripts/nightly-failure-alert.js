@@ -42,24 +42,23 @@ function filterActiveOwners(owners = [], absences = []) {
 }
 
 /**
- * Reads and resolves active owners from OWNERS and ABSENCE.md files.
+ * Reads OWNERS and resolves active owners by filtering out absent users from ABSENCE_LIST content.
  * @param {string} ownersPath
- * @param {string} absencePath
- * @param {any} core
+ * @param {string} absenceContent
+ * @param {any} [core=null]
  * @param {Date} [currentDate=new Date()]
  * @returns {string[]} Active owner usernames.
  */
-function resolveActiveOwners(ownersPath, absencePath, core, currentDate = new Date()) {
+function resolveActiveOwners(ownersPath, absenceContent, core = null, currentDate = new Date()) {
   if (!fs.existsSync(ownersPath) && core) {
     core.warning(`Owners file not found at '${ownersPath}'.`);
   }
   const ownersContent = fs.existsSync(ownersPath) ? fs.readFileSync(ownersPath, 'utf8') : '';
-  const absenceContent = fs.existsSync(absencePath) ? fs.readFileSync(absencePath, 'utf8') : '';
 
-  const { absentUsers, errors } = parseAbsenceFile(absenceContent, currentDate);
+  const { absentUsers, errors } = parseAbsenceFile(absenceContent || '', currentDate);
   if (core) {
     for (const err of errors) {
-      core.warning(`Invalid ABSENCE.md entry ignored: ${err}`);
+      core.warning(`Invalid ABSENCE_LIST entry ignored: ${err}`);
     }
   }
   const activeOwners = filterActiveOwners(parseUsernames(ownersContent), absentUsers);
@@ -336,17 +335,17 @@ function buildAlertParams(context, activeOwners, associatedPr, needsContext) {
  * @param {any} params.context - Workflow execution context.
  * @param {any} params.core - Actions core logger.
  * @param {string} [params.ownersPath='OWNERS'] - Path to OWNERS file.
- * @param {string} [params.absencePath='ABSENCE.md'] - Path to ABSENCE.md file.
+ * @param {string} [params.absenceContent=process.env.ABSENCE_LIST || ''] - Raw ABSENCE_LIST content.
  */
 async function run({
   github,
   context,
   core,
   ownersPath = 'OWNERS',
-  absencePath = 'ABSENCE.md',
+  absenceContent = process.env.ABSENCE_LIST || '',
 }) {
   const { owner, repo } = context.repo;
-  const activeOwners = resolveActiveOwners(ownersPath, absencePath, core);
+  const activeOwners = resolveActiveOwners(ownersPath, absenceContent, core);
   const needsContext = parseNeedsContext(core);
   const associatedPr = await lookupAssociatedPullRequest(github, owner, repo, context.sha, core);
   const alertParams = buildAlertParams(context, activeOwners, associatedPr, needsContext);

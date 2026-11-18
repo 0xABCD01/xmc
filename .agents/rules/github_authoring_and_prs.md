@@ -132,7 +132,7 @@ Whenever creating, modifying, or reviewing GitHub Actions workflow files under `
      ```yaml
      on:
        # zizmor: ignore[pull-request-target]
-       # Required to grant PR write permissions for auto-approving ABSENCE.md updates on fork PRs.
+       # Required to grant PR write permissions on fork PRs.
        pull_request_target:
      ```
 
