@@ -32,6 +32,14 @@ const (
 	// ExperimentIDLabel is the label used to identify the experiment ID.
 	ExperimentIDLabel = "xmc.google.com/experiment-id"
 
+	// MultiKueueClusterProjectLabel, MultiKueueClusterLocationLabel, and
+	// MultiKueueClusterNameLabel identify the GKE cluster behind a MultiKueueCluster.
+	// They are set by the MultiKueue deployment (Helm kueue-dev/multikueue.yaml and
+	// deploy/addons/multikueue).
+	MultiKueueClusterProjectLabel  = "xmc.google.com/project"
+	MultiKueueClusterLocationLabel = "xmc.google.com/location"
+	MultiKueueClusterNameLabel     = "xmc.google.com/cluster-name"
+
 	// JobSetFinalizer is the finalizer used by XManager Cloud to manage JobSet lifecycle.
 	JobSetFinalizer = "jobset.xmanager.cloud/finalizer"
 
@@ -131,6 +139,17 @@ const (
 	ActuatorWorkerID = "actuator-worker"
 	// ActuatorCleanupWorkerID is the prefix for the ID of the Actuator cleanup worker.
 	ActuatorCleanupWorkerID = "actuator-cleanup"
+	// RedisStudyReconcileStream is the name of the Redis stream carrying study reconcile ticks
+	// from the Experiment State Server to the Study Controller.
+	RedisStudyReconcileStream = "xmc-study-reconcile-stream"
+	// RedisStudyControllerGroup is the name of the Redis consumer group for Study Controller workers.
+	RedisStudyControllerGroup = "study-controller-group"
+	// RedisStudyReconcileDLQ is the name of the Redis dead-letter stream for study reconcile ticks.
+	RedisStudyReconcileDLQ = "xmc-study-reconcile-dlq-stream"
+	// StudyControllerWorkerID is the prefix for the ID of the Study Controller worker.
+	StudyControllerWorkerID = "study-controller-worker"
+	// StudyControllerCleanupWorkerID is the prefix for the ID of the Study Controller cleanup worker.
+	StudyControllerCleanupWorkerID = "study-controller-cleanup"
 
 	// RedisMaxRetries is the maximum number of retries for a Redis task.
 	RedisMaxRetries = 5

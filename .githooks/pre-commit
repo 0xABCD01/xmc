@@ -135,71 +135,11 @@ check_go() {
   fi
 }
 
-check_legacy_imports() {
-  echo "--> Running google3 Legacy Import Ratchet..."
-  local baseline="tools/lint/legacy_imports_baseline.json"
-  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_legacy_imports.py >/dev/null; then
-    echo "❌ google3 legacy import ratchet failed (see JSON error above)."
-    FAILED=1
-    return
-  fi
-  if [ "$MODE" = "fix" ]; then
-    # Lower the baseline when counts dropped (the tool never raises counts) and
-    # stage it so the reduction is recorded in this commit.
-    XMC_BYPASS_VENV=1 python3 tools/lint/check_legacy_imports.py --update-baseline >/dev/null
-    if ! git diff --quiet -- "${baseline}"; then
-      git add -- "${baseline}"
-      echo "--> Lowered and staged ${baseline}."
-    fi
-  fi
-}
-
-check_examples_coverage() {
-  echo "--> Checking Nightly E2E Verification Coverage for examples/..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/nightly_tests/check_examples_coverage.py >/dev/null; then
-    echo "❌ Nightly examples verification coverage check failed."
+check_python_gates() {
+  if ! XMC_BYPASS_VENV=1 python3 tools/lint/precommit_gates.py --mode "${MODE}"; then
     FAILED=1
   fi
 }
-
-check_matrix_contract() {
-  echo "--> Checking Nightly Matrix Launch Args vs Verifier Expectations..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/nightly_tests/check_matrix_contract.py >/dev/null; then
-    echo "❌ Nightly matrix contract check failed (see JSON error above)."
-    FAILED=1
-  fi
-}
-
-check_agent_doc_paths() {
-  # In fix mode, only run when agent docs are staged, or when staged deletes or
-  # renames could orphan a path an agent doc references, to keep the hook fast.
-  if [ "${MODE}" = "fix" ] && ! staged_paths_match AM '^\.agents/.*\.md$|(^|/)AGENTS\.md$' && ! staged_paths_match D '.'; then
-    return
-  fi
-  echo "--> Checking Agent Doc Path References..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_agent_doc_paths.py >/dev/null; then
-    echo "❌ Agent docs reference non-existent repository paths (see JSON error above)."
-    FAILED=1
-  fi
-}
-
-check_file_naming() {
-  echo "--> Checking UI & Workflow File Naming Conventions..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_file_naming.py >/dev/null; then
-    echo "❌ UI or workflow file naming check failed (see JSON error above)."
-    FAILED=1
-  fi
-}
-
-check_ui_selector_contract() {
-  # Runs unconditionally (~0.2s): sources are discovered by content, so no path gate.
-  echo "--> Checking Nightly UI Selector Contract..."
-  if ! XMC_BYPASS_VENV=1 python3 tools/lint/check_ui_selector_contract.py >/dev/null; then
-    echo "❌ Nightly UI selectors reference missing DOM or unannotated copy (see JSON error above)."
-    FAILED=1
-  fi
-}
-
 
 check_ui() {
   local ui_files
@@ -387,124 +327,9 @@ check_mypy() {
   fi
 }
 
-check_terraform() {
-  local tf_files
-  if [ "$MODE" = "check" ]; then
-    tf_files=$(find deploy -type f -name "*.tf" || true)
-  else
-    tf_files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.tf$' || true)
-  fi
-
-  if [ -z "$tf_files" ]; then
-    return
-  fi
-
-  echo "--> Running Terraform Formatter (terraform fmt)..."
-  if command -v terraform >/dev/null 2>&1; then
-    if [ "$MODE" = "check" ]; then
-      if ! terraform fmt -check $tf_files; then
-        echo "❌ Terraform formatting check failed."
-        FAILED=1
-      fi
-    else
-      terraform fmt $tf_files || true
-    fi
-  elif command -v docker >/dev/null 2>&1; then
-    if [ "$MODE" = "check" ]; then
-      if ! docker run --rm -v "$(pwd):/workspace" -w /workspace hashicorp/terraform:latest fmt -check $tf_files; then
-        echo "❌ Terraform formatting check failed."
-        FAILED=1
-      fi
-    else
-      docker run --rm -v "$(pwd):/workspace" -w /workspace hashicorp/terraform:latest fmt $tf_files || true
-    fi
-  else
-    echo "--> WARNING: terraform or docker not found. Terraform formatting check skipped."
-    if [ "$MODE" = "check" ]; then FAILED=1; fi
-  fi
-}
-
-check_tflint() {
-  # TFLint lints whole modules, so fix mode also runs it when a staged delete or
-  # rename removes a .tf file that the remaining module files depend on, or when
-  # its .tflint.hcl configuration changes.
-  if [ "${MODE}" = "check" ]; then
-    if [ -z "$(find deploy -type f -name "*.tf" || true)" ]; then return; fi
-  elif ! staged_paths_match AMD '\.tf$|(^|/)\.tflint\.hcl$'; then
-    return
-  fi
-
-  echo "--> Running Terraform Linter (TFLint)..."
-  if command -v tflint >/dev/null 2>&1; then
-    tflint --init >/dev/null 2>&1 || true
-    if ! tflint --recursive; then
-      echo "❌ TFLint check failed."
-      FAILED=1
-    fi
-  elif command -v docker >/dev/null 2>&1; then
-    if ! docker run --rm -v "$(pwd):/data" -w /data --entrypoint sh ghcr.io/terraform-linters/tflint:latest -c "tflint --init >/dev/null 2>&1 && tflint --recursive"; then
-      echo "❌ TFLint check failed."
-      FAILED=1
-    fi
-  else
-    echo "--> WARNING: tflint or docker not found. TFLint check skipped."
-    if [ "$MODE" = "check" ]; then FAILED=1; fi
-  fi
-}
-
-check_helm() {
-  # helm lint covers the whole chart, so fix mode runs it for any staged add,
-  # modify, delete or rename under deploy/helm/; chart/blueprint unit tests in
-  # test/helm/ also run when deploy/ctk_v2/ YAML/Terraform modules or test/helm/ changes.
-  if [ "${MODE}" = "check" ]; then
-    if [ -z "$(find deploy/helm test/helm -type f \( -name "*.yaml" -o -name "*.yml" -o -name "*_test.py" \) || true)" ]; then return; fi
-  elif ! staged_paths_match AMD '^(deploy/helm/|deploy/ctk_v2/([^/]+\.ya?ml$|modules/)|test/helm/)'; then
-    return
-  fi
-
-  if [ "${MODE}" = "check" ] || staged_paths_match AMD '^deploy/helm/'; then
-    if command -v helm >/dev/null 2>&1; then
-      echo "--> Running Helm Chart Linter (helm lint)..."
-      if ! helm lint deploy/helm; then
-        echo "❌ Helm lint failed."
-        FAILED=1
-      fi
-    else
-      echo "--> WARNING: helm not found. Helm chart linting skipped."
-      if [ "$MODE" = "check" ]; then FAILED=1; fi
-    fi
-  fi
-
-  echo "--> Running Helm Chart & Blueprint Unit Tests (test/helm)..."
-  if ! PYTHONPATH="test/helm:${PYTHONPATH:-}" python3 -m unittest discover --start-directory test/helm --pattern '*_test.py'; then
-    echo "❌ Helm chart & blueprint unit tests failed."
+check_deploy_gates() {
+  if ! XMC_BYPASS_VENV=1 python3 tools/lint/precommit_deploy_checks.py --mode "${MODE}"; then
     FAILED=1
-  fi
-}
-
-check_security() {
-  # Trivy scans all of deploy/, so fix mode runs it for any staged add, modify,
-  # delete or rename under deploy/.
-  if [ "${MODE}" = "check" ]; then
-    if [ -z "$(find deploy -type f \( -name "*.tf" -o -name "*.tfvars" -o -name "*.yaml" -o -name "*.yml" \) || true)" ]; then return; fi
-  elif ! staged_paths_match AMD '^deploy/'; then
-    return
-  fi
-
-  echo "--> Running Infrastructure & Workload Security Scanner (Trivy)..."
-  if command -v trivy >/dev/null 2>&1; then
-    if ! trivy config --skip-check-update --severity HIGH,CRITICAL deploy/; then
-      echo "❌ Trivy security check failed."
-      FAILED=1
-    fi
-  elif command -v docker >/dev/null 2>&1; then
-    if ! docker run --rm -v "$(pwd):/src" -w /src aquasec/trivy:latest config --skip-check-update --severity HIGH,CRITICAL deploy/; then
-      echo "❌ Trivy security check failed."
-      FAILED=1
-    fi
-  else
-    echo "--> WARNING: trivy or docker not found. Security check skipped."
-    if [ "$MODE" = "check" ]; then FAILED=1; fi
   fi
 }
 
@@ -583,20 +408,12 @@ main() {
   snapshot_staging
   check_bazel
   check_go
-  check_legacy_imports
-  check_examples_coverage
-  check_matrix_contract
-  check_agent_doc_paths
-  check_file_naming
-  check_ui_selector_contract
+  check_python_gates
   check_ui
   check_license
   check_python
   check_mypy
-  check_terraform
-  check_tflint
-  check_helm
-  check_security
+  check_deploy_gates
 
   restage_fixes
 

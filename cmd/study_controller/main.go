@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // Package main is the entrypoint of xmc-study-controller, the workload of the hpo component.
-// It currently serves only health and metrics endpoints.
+// It consumes study reconcile ticks from Redis and serves health and metrics endpoints; /readyz
+// reports whether Redis is reachable.
 package main
 
 import (
@@ -29,7 +30,9 @@ import (
 	"time"
 
 	"xmanager_cloud/cmd/study_controller/config"
+	"xmanager_cloud/cmd/study_controller/worker"
 	"xmanager_cloud/internal/logging"
+	"xmanager_cloud/internal/task_queue_redis/redisclient"
 )
 
 // HTTP server timeouts bound per-connection resource usage (e.g. slow-client attacks).
@@ -65,16 +68,43 @@ func run(ctx context.Context, args []string) int {
 		logging.Error(ctx, "Invalid configuration", "error", err)
 		return 1
 	}
-	lis, err := net.Listen("tcp", ":"+cfg.Port)
-	if err != nil {
-		logging.Error(ctx, "Failed to listen", "port", cfg.Port, "error", err)
-		return 1
-	}
-	if err := serve(ctx, lis, newHTTPHandler()); err != nil {
+	if err := listenAndServe(ctx, *cfg); err != nil {
 		logging.Error(ctx, "Study controller stopped with error", "error", err)
 		return 1
 	}
 	return 0
+}
+
+// listenAndServe listens on cfg.Port, consumes study reconcile ticks from the Redis server at
+// cfg.RedisAddr and serves the HTTP endpoints until ctx is done. The Redis consumer client also
+// backs readiness. The consumer is stopped and its client closed on return.
+func listenAndServe(ctx context.Context, cfg config.Config) error {
+	lis, err := net.Listen("tcp", ":"+cfg.Port)
+	if err != nil {
+		return fmt.Errorf("failed to listen on port %s: %w", cfg.Port, err)
+	}
+	return serveWithClient(ctx, lis, worker.NewRedisConsumer(cfg.RedisAddr))
+}
+
+func serveWithClient(ctx context.Context, lis net.Listener, client *redisclient.ConsumerClient) error {
+	handler, err := worker.NewRedisHandler(client)
+	if err != nil {
+		_ = lis.Close()
+		if client != nil && client.Client != nil {
+			_ = client.Close(context.WithoutCancel(ctx))
+		}
+		return fmt.Errorf("failed to create study reconcile handler: %w", err)
+	}
+	consumer := worker.Start(ctx, client, handler)
+	defer stopConsumer(ctx, consumer)
+	return serve(ctx, lis, newHTTPHandler(client))
+}
+
+// stopConsumer stops consumer, logging rather than returning a failure: it runs on shutdown.
+func stopConsumer(ctx context.Context, consumer *worker.Consumer) {
+	if err := consumer.Close(context.WithoutCancel(ctx)); err != nil {
+		logging.Warn(ctx, "Failed to close the study reconcile consumer", "error", err)
+	}
 }
 
 // serve serves handler on lis until ctx is done, then shuts the server down gracefully.

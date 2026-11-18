@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -70,7 +71,7 @@ func catalogConsistency(s Spec) error {
 }
 
 // metadataConsistency checks that s.ProfileName is used in every place that names the profile,
-// and that profile.yaml minXmcVersion and supportWindow are well-formed.
+// and that profile.yaml minXmcVersion, supportWindow and the optional status are well-formed.
 func metadataConsistency(s Spec) error {
 	dir, err := chartDir(s)
 	if err != nil {
@@ -96,7 +97,39 @@ func metadataConsistency(s Spec) error {
 	}
 	window := Lookup(src, "profile.yaml", "supportWindow")
 	errs = append(errs, supportWindowError(fmt.Sprint(Lookup(window, "start")), fmt.Sprint(Lookup(window, "end"))))
+	_, statusErr := releaseStatus(src)
+	errs = append(errs, statusErr)
 	return errors.Join(errs...)
+}
+
+// Release statuses that profile.yaml may declare in its optional status field.
+const (
+	StatusPreview = "preview"
+	StatusStable  = "stable"
+)
+
+// releaseStatus returns the profile.yaml status, StatusStable when the field is absent, or an
+// error when it is neither StatusPreview nor StatusStable.
+func releaseStatus(src map[string]any) (string, error) {
+	raw := Lookup(src, "profile.yaml", "status")
+	if raw == nil {
+		return StatusStable, nil
+	}
+	if status, _ := raw.(string); status == StatusPreview || status == StatusStable {
+		return status, nil
+	}
+	return "", fmt.Errorf("profile.yaml status = %v, want %q or %q (or omitted for %q)", raw, StatusPreview, StatusStable, StatusStable)
+}
+
+// ReleaseStatus returns the release status that the profile.yaml of s declares, defaulting to
+// StatusStable when the field is absent, and fails the test when it cannot be read or is invalid.
+func ReleaseStatus(t *testing.T, s Spec) string {
+	t.Helper()
+	src, err := readProfileSources(ChartDir(t, s))
+	fatalOnError(t, err)
+	status, err := releaseStatus(src)
+	fatalOnError(t, err)
+	return status
 }
 
 // readProfileSources decodes profile.yaml, Chart.yaml, values.yaml and values.schema.json (JSON

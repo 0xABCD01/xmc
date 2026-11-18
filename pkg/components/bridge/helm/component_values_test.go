@@ -225,3 +225,36 @@ func TestK8sHelmManager_ComponentValues_CreateAlreadyExistsRetriesAsUpdate(t *te
 		})
 	}
 }
+
+func TestWithPersistedProfile(t *testing.T) {
+	values := map[string]any{"ingestionGatewayDeployment": map[string]any{"enabled": true}}
+	got := withPersistedProfile(values, "stable-test")
+	want := map[string]any{"ingestionGatewayDeployment": map[string]any{"enabled": true}, persistedProfileKey: "stable-test"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("withPersistedProfile() mismatch (-want +got):\n%s", diff)
+	}
+	if _, leaked := values[persistedProfileKey]; leaked {
+		t.Errorf("withPersistedProfile() modified the Helm values: %v", values)
+	}
+}
+
+func TestExtractProfileFromValuesJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		rawJSON string
+		want    string
+	}{
+		{name: "stored profile", rawJSON: `{"xmc.dev/profile":"stable-test"}`, want: "stable-test"},
+		{name: "stored before profiles existed", rawJSON: `{"ingestionGatewayDeployment":{"enabled":true}}`, want: DefaultProfile},
+		{name: "empty profile", rawJSON: `{"xmc.dev/profile":""}`, want: DefaultProfile},
+		{name: "non-string profile", rawJSON: `{"xmc.dev/profile":3}`, want: DefaultProfile},
+		{name: "malformed JSON", rawJSON: `{`, want: DefaultProfile},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractProfileFromValuesJSON(tc.rawJSON); got != tc.want {
+				t.Errorf("extractProfileFromValuesJSON(%s) = %q, want %q", tc.rawJSON, got, tc.want)
+			}
+		})
+	}
+}

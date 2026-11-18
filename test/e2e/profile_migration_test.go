@@ -69,7 +69,7 @@ var profileCatalogComponents = []string{"redpanda", clickhouseComponent, gateway
 var enabledProfileComponents = []string{clickhouseComponent, gatewayComponent}
 
 // TestProfileMigrationE2E upgrades the Component CRs of the real stable-2026a profile to a test-only
-// stable-2026b overlay on KinD, with an in-process bridge whose real Helm manager actuates the 1P
+// stable-2099z overlay on KinD, with an in-process bridge whose real Helm manager actuates the 1P
 // ingestion-gateway through a public-image stand-in chart (parameters.chartPath). During the
 // migration a continuous HTTP probe (about 5 requests/s, a new connection per request) hits the
 // gateway Service and must record zero failed requests. A continuous ClickHouse INSERT/SELECT stream
@@ -155,7 +155,7 @@ func gatewayImage(tag string) string {
 
 func loadProfileOverlay(t *testing.T) profileOverlay {
 	t.Helper()
-	raw, err := os.ReadFile(locateRepoPath(t, profileMigrationTestdata+"/stable-2026b-overlay.yaml"))
+	raw, err := os.ReadFile(locateRepoPath(t, profileMigrationTestdata+"/stable-2099z-overlay.yaml"))
 	if err != nil {
 		t.Fatalf("failed to read profile overlay fixture: %v", err)
 	}

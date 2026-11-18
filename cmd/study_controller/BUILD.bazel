@@ -26,7 +26,9 @@ go_library(
     importpath = "xmanager_cloud/cmd/study_controller",
     deps = [
         "//cmd/study_controller/config",
+        "//cmd/study_controller/worker",
         "//internal/logging",
+        "//internal/task_queue_redis/redisclient",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
     ],
 )
@@ -50,4 +52,10 @@ go_test(
         "main_test.go",
     ],
     embed = [":study_controller_lib"],
+    deps = [
+        "//cmd/study_controller/config",
+        "//cmd/study_controller/worker",
+        "//internal/logging",
+        "//internal/task_queue_redis/redisclient",
+    ],
 )
