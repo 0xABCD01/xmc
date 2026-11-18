@@ -90,7 +90,6 @@ To switch between self-hosted ARC runners and GitHub-hosted cloud runners (`ubun
 
 Search and replace `runs-on: 'arc-runner-set'` with `runs-on: 'ubuntu-latest'` across all `.github/workflows/*.yml` files:
 
-- `.github/workflows/auto-approve-absence.yml`
 - `.github/workflows/auto-assign-reviewers.yml`
 - `.github/workflows/deploy-gke.yml`
 - `.github/workflows/e2e-tests.yml`

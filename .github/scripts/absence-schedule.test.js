@@ -17,8 +17,7 @@ const assert = require('node:assert/strict');
 const {
   parseDdMmYyyy,
   parseAbsenceLine,
-  parseAbsenceFile,
-  validateAbsenceContent
+  parseAbsenceFile
 } = require('./absence-schedule');
 
 test('parseDdMmYyyy validates strict DD.MM.YYYY calendar dates in UTC', () => {
@@ -100,11 +99,55 @@ extraTokensUser 10.11.2026-15.11.2026 extra
   assert.equal(parseAbsenceLine('invertedUser 15.11.2026-10.11.2026', 2).valid, false);
 });
 
-test('validateAbsenceContent validates content and rejects non-string input', () => {
-  assert.deepEqual(validateAbsenceContent('alice\nbob 10.11.2026-15.11.2026\n'), {
-    valid: true
-  });
-  const nonStringResult = validateAbsenceContent(null);
-  assert.equal(nonStringResult.valid, false);
-  assert.ok(nonStringResult.reason.includes('not a string'));
+test('parseAbsenceFile handles null/empty content and reports all invalid date and format errors', () => {
+  assert.deepEqual(parseAbsenceFile(null), { absentUsers: [], errors: [] });
+  assert.deepEqual(parseAbsenceFile(''), { absentUsers: [], errors: [] });
+
+  const invalidCases = [
+    {
+      content: 'alice 16.11.2026-15.11.2026\n',
+      expectedSubstring: 'after end date'
+    },
+    {
+      content: 'alice 31.02.2026-15.03.2026\n',
+      expectedSubstring: 'invalid start date'
+    },
+    {
+      content: 'alice 10.11.2026-29.02.2027\n',
+      expectedSubstring: 'invalid end date'
+    },
+    {
+      content: 'alice 2026-11-10-2026-11-15\n',
+      expectedSubstring: 'invalid date range format'
+    },
+    {
+      content: 'alice 10.11.2026-15.11.2026 extra\n',
+      expectedSubstring: 'invalid format'
+    },
+    {
+      content: '10.11.2026-15.11.2026\n',
+      expectedSubstring: 'invalid username'
+    }
+  ];
+
+  for (const { content, expectedSubstring } of invalidCases) {
+    const { absentUsers, errors } = parseAbsenceFile(content);
+    assert.deepEqual(absentUsers, []);
+    assert.equal(errors.length, 1, `Expected 1 error for: ${content}`);
+    assert.ok(
+      errors[0].includes(expectedSubstring),
+      `Expected "${errors[0]}" to include "${expectedSubstring}"`
+    );
+  }
+});
+
+test('parseAbsenceFile supports comma/semicolon delimiters and comments with commas', () => {
+  const envContent = `
+# - NICK DD.MM.YYYY-DD.MM.YYYY (absent during the inclusive UTC date range, e.g., alice 10.11.2026-15.11.2026)
+alice, bob; charlie 16.11.2026-18.11.2026
+`;
+  assert.deepEqual(
+    parseAbsenceFile(envContent, new Date('2026-11-16T12:00:00Z')),
+    { absentUsers: ['alice', 'bob', 'charlie'], errors: [] }
+  );
 });

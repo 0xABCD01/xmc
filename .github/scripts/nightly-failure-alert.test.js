@@ -85,39 +85,33 @@ describe('filterActiveOwners', () => {
 });
 
 describe('resolveActiveOwners', () => {
-  test('reads files from disk and filters active owners', () => {
+  test('reads OWNERS from disk and filters active owners using ABSENCE_LIST content', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-resolve-owners-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
 
     try {
       fs.writeFileSync(ownersFile, 'User1\nUser2\nUser3\n');
-      fs.writeFileSync(absenceFile, 'User2\n');
 
-      const active = resolveActiveOwners(ownersFile, absenceFile, { info: () => {}, warning: () => {} });
+      const active = resolveActiveOwners(ownersFile, 'User2\n', { info: () => {}, warning: () => {} });
       assert.deepEqual(active, ['User1', 'User3']);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  test('respects scheduled DD.MM.YYYY-DD.MM.YYYY date ranges and logs warnings for invalid lines in ABSENCE.md', () => {
+  test('respects scheduled DD.MM.YYYY-DD.MM.YYYY date ranges and logs warnings for invalid lines in ABSENCE_LIST', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-resolve-owners-range-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
+    const absenceContent = 'User2\nUser3 10.11.2026-15.11.2026\nUser1 31.02.2026-15.03.2026\n';
     const warnings = [];
     const mockCore = { info: () => {}, warning: (msg) => warnings.push(msg) };
 
     try {
       fs.writeFileSync(ownersFile, 'User1\nUser2\nUser3\n');
-      fs.writeFileSync(
-        absenceFile,
-        'User2\nUser3 10.11.2026-15.11.2026\nUser1 31.02.2026-15.03.2026\n'
-      );
 
       // Before User3's absence window: User3 is active, User2 is unconditionally absent
       assert.deepEqual(
-        resolveActiveOwners(ownersFile, absenceFile, mockCore, new Date('2026-11-09T12:00:00Z')),
+        resolveActiveOwners(ownersFile, absenceContent, mockCore, new Date('2026-11-09T12:00:00Z')),
         ['User1', 'User3']
       );
       assert.equal(warnings.length, 1);
@@ -125,19 +119,19 @@ describe('resolveActiveOwners', () => {
 
       // On start boundary (2026-11-10 UTC): both User2 and User3 are absent
       assert.deepEqual(
-        resolveActiveOwners(ownersFile, absenceFile, mockCore, new Date('2026-11-10T00:00:00Z')),
+        resolveActiveOwners(ownersFile, absenceContent, mockCore, new Date('2026-11-10T00:00:00Z')),
         ['User1']
       );
 
       // On end boundary (2026-11-15 UTC): both User2 and User3 are absent
       assert.deepEqual(
-        resolveActiveOwners(ownersFile, absenceFile, mockCore, new Date('2026-11-15T23:59:59Z')),
+        resolveActiveOwners(ownersFile, absenceContent, mockCore, new Date('2026-11-15T23:59:59Z')),
         ['User1']
       );
 
       // After User3's absence window (2026-11-16 UTC): User3 is active again
       assert.deepEqual(
-        resolveActiveOwners(ownersFile, absenceFile, mockCore, new Date('2026-11-16T00:00:00Z')),
+        resolveActiveOwners(ownersFile, absenceContent, mockCore, new Date('2026-11-16T00:00:00Z')),
         ['User1', 'User3']
       );
     } finally {
@@ -145,7 +139,7 @@ describe('resolveActiveOwners', () => {
     }
   });
 
-  test('handles missing owners and absence files gracefully', () => {
+  test('handles missing owners file and empty absence content gracefully', () => {
     let warningLogged = false;
     const mockCore = {
       info: () => {},
@@ -153,7 +147,7 @@ describe('resolveActiveOwners', () => {
         if (msg.includes('not found')) warningLogged = true;
       },
     };
-    const active = resolveActiveOwners('/nonexistent/OWNERS', '/nonexistent/ABSENCE.md', mockCore);
+    const active = resolveActiveOwners('/nonexistent/OWNERS', '', mockCore);
     assert.deepEqual(active, []);
     assert.ok(warningLogged);
   });
@@ -526,10 +520,8 @@ describe('run orchestrator', () => {
   test('creates new issue when no open nightly failure issue exists', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-test-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
 
     fs.writeFileSync(ownersFile, 'Alice\nBob\nCharlie\n');
-    fs.writeFileSync(absenceFile, 'Bob\n');
 
     const origNeedsContext = process.env.NEEDS_CONTEXT;
     const origXid = process.env.XID;
@@ -578,7 +570,7 @@ describe('run orchestrator', () => {
         context: mockContext,
         core: mockCore,
         ownersPath: ownersFile,
-        absencePath: absenceFile,
+        absenceContent: 'Bob\n',
       });
 
       assert.equal(result.status, 'issue_created');
@@ -599,7 +591,6 @@ describe('run orchestrator', () => {
   test('adds comment to existing open issue when one already exists', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-test-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
 
     fs.writeFileSync(ownersFile, 'Alice\n');
 
@@ -640,7 +631,7 @@ describe('run orchestrator', () => {
         context: mockContext,
         core: mockCore,
         ownersPath: ownersFile,
-        absencePath: absenceFile,
+        absenceContent: '',
       });
 
       assert.equal(result.status, 'comment_created');
@@ -656,7 +647,6 @@ describe('run orchestrator', () => {
   test('ignores pull requests with nightly-failure label and creates a new issue', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-test-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
 
     fs.writeFileSync(ownersFile, 'Alice\n');
 
@@ -701,13 +691,73 @@ describe('run orchestrator', () => {
         context: mockContext,
         core: mockCore,
         ownersPath: ownersFile,
-        absencePath: absenceFile,
+        absenceContent: '',
       });
 
       assert.equal(result.status, 'issue_created');
       assert.equal(result.issueNumber, 43);
       assert.ok(createdIssue);
     } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('reads process.env.ABSENCE_LIST when absenceContent is omitted', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-env-test-'));
+    const ownersFile = path.join(tempDir, 'OWNERS');
+
+    fs.writeFileSync(ownersFile, 'Alice\nBob\nCharlie\n');
+
+    const origAbsenceList = process.env.ABSENCE_LIST;
+    let createdIssue = null;
+    const mockGithub = {
+      rest: {
+        repos: {
+          listPullRequestsAssociatedWithCommit: async () => ({ data: [] }),
+        },
+        issues: {
+          listForRepo: async () => ({ data: [] }),
+          create: async (payload) => {
+            createdIssue = payload;
+            return { data: { number: 44 } };
+          },
+          createComment: async () => assert.fail('Should not create comment when no issue exists'),
+        },
+      },
+    };
+
+    const mockContext = {
+      repo: { owner: 'google', repo: 'xmc' },
+      runId: 1000,
+      sha: 'aabbccdd11223344556677889900aabbccddeeff',
+      ref: 'refs/heads/main',
+      eventName: 'schedule',
+    };
+
+    const mockCore = {
+      info: () => {},
+      warning: () => {},
+      setFailed: () => {},
+    };
+
+    try {
+      process.env.ABSENCE_LIST = 'Bob\n';
+      const result = await run({
+        github: mockGithub,
+        context: mockContext,
+        core: mockCore,
+        ownersPath: ownersFile,
+      });
+
+      assert.equal(result.status, 'issue_created');
+      assert.ok(createdIssue.body.includes('@Alice @Charlie'));
+      assert.ok(!createdIssue.body.includes('@Bob'));
+    } finally {
+      if (origAbsenceList === undefined) {
+        delete process.env.ABSENCE_LIST;
+      } else {
+        process.env.ABSENCE_LIST = origAbsenceList;
+      }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
