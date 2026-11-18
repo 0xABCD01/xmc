@@ -99,7 +99,7 @@ def _parse_args() -> argparse.Namespace:
     project_id = os.environ.get("PROJECT_ID")
     default_image = os.environ.get("IMAGE_PATH")
     if not default_image and project_id:
-        default_image = f"us-docker.pkg.dev/{project_id}/xmc/programmatic-xprof-job:latest"
+        default_image = f"us-docker.pkg.dev/{project_id}/xmc/managed-xprof-artifact-job:latest"
 
     parser = argparse.ArgumentParser(description="Launch XMC + Diagon Profiling Experiment")
     parser.add_argument(
