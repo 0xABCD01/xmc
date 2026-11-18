@@ -93,9 +93,18 @@ func (f *fakeConsumer) waitForLoops(t *testing.T) []string {
 	return ids
 }
 
+func newStubHandler(t *testing.T) *Handler {
+	t.Helper()
+	h, err := NewHandler(HandlerParams{Locker: &fakeLocker{lease: &fakeLease{}}})
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	return h
+}
+
 func TestStart_RunsLoopsWithHandleTask(t *testing.T) {
 	fake := newFakeConsumer()
-	c := Start(context.Background(), fake)
+	c := Start(context.Background(), fake, newStubHandler(t))
 	defer c.Close(context.Background())
 	ids := fake.waitForLoops(t)
 
@@ -111,7 +120,7 @@ func TestStart_RunsLoopsWithHandleTask(t *testing.T) {
 		t.Fatal("Start() did not set a task handler")
 	}
 	if got := handler(context.Background(), "w", `{"experiment":"experiments/7"}`); !got.WasRunSuccessful {
-		t.Errorf("task handler on a valid tick = %+v, want success (handleTask)", got)
+		t.Errorf("task handler on a valid tick = %+v, want success (HandleTask)", got)
 	}
 }
 
@@ -127,7 +136,7 @@ func containsPrefix(ids []string, prefix string) bool {
 func TestConsumer_CloseStopsLoopsAndClosesClient(t *testing.T) {
 	fake := newFakeConsumer()
 	fake.closeErr = errors.New("close failed")
-	c := Start(context.Background(), fake)
+	c := Start(context.Background(), fake, newStubHandler(t))
 	fake.waitForLoops(t)
 
 	if err := c.Close(context.Background()); !errors.Is(err, fake.closeErr) {
@@ -146,7 +155,7 @@ func TestConsumer_CloseStopsLoopsAndClosesClient(t *testing.T) {
 func TestStart_ContextCancelStopsLoops(t *testing.T) {
 	fake := newFakeConsumer()
 	ctx, cancel := context.WithCancel(context.Background())
-	c := Start(ctx, fake)
+	c := Start(ctx, fake, newStubHandler(t))
 	fake.waitForLoops(t)
 
 	cancel()
@@ -179,7 +188,7 @@ func TestConsumer_CloseWithStuckLoops(t *testing.T) {
 			fake := newFakeConsumer()
 			fake.ignoreCancel = true
 			defer close(fake.release)
-			c := Start(context.Background(), fake)
+			c := Start(context.Background(), fake, newStubHandler(t))
 			fake.waitForLoops(t)
 			c.drainTimeout = tc.drainTimeout
 
@@ -204,6 +213,7 @@ type consumerSettings struct {
 	Addr, Stream, Group, DLQ string
 	MaxRetries               int
 	ContextTimeoutEnabled    bool
+	DrainTimeout             time.Duration
 }
 
 func TestNewRedisConsumer(t *testing.T) {
@@ -217,10 +227,12 @@ func TestNewRedisConsumer(t *testing.T) {
 	got := consumerSettings{
 		Addr: client.Options().Addr, Stream: c.StreamName, Group: c.GroupName, DLQ: c.DLQStreamName,
 		MaxRetries: c.MaxRetries, ContextTimeoutEnabled: client.Options().ContextTimeoutEnabled,
+		DrainTimeout: defaultDrainTimeout,
 	}
 	want := consumerSettings{
 		Addr: "redis-service:6379", Stream: "xmc-study-reconcile-stream", Group: "study-controller-group",
 		DLQ: "xmc-study-reconcile-dlq-stream", MaxRetries: constants.RedisMaxRetries, ContextTimeoutEnabled: true,
+		DrainTimeout: 10 * time.Second,
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("NewRedisConsumer() settings mismatch (-want +got):\n%s", diff)
