@@ -87,10 +87,6 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 # 'compare' module is provided by regression test framework runners
 "test/regression/*" = ["F821"]
-# Buffer and E2E require wall-clock unix epoch timestamps for telemetry and naming
-"sdks/python/xmc/buffer.py" = ["TID251"]
-"sdks/python/xmc/buffer_test.py" = ["TID251"]
-"test/e2e/*" = ["TID251"]
 # TODO: migrate to StrEnum
 "test/e2e/lib/config.py" = ["UP042"]
 # Relax annotation, unused-arg, and private-member checks in tests, generated migrations, example launchers, and framework callback hooks
@@ -102,7 +98,7 @@ convention = "google"
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "time.time".msg = "Use time.monotonic() for measuring intervals, deadlines, and elapsed time."
-"unittest.skip".msg = "Unconditional test skipping is forbidden; fix the test or use a conditional skipUnless with an explicit # noqa: TID251 - <reason> justification."
+"unittest.skip".msg = "Unconditional test skipping is forbidden; fix the test, use conditional unittest.skipUnless/skipIf, or justify with # noqa: TID251 - <reason>."
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
