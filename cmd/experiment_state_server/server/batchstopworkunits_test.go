@@ -30,7 +30,6 @@ import (
 	tq "xmanager_cloud/internal/task_queue"
 	"xmanager_cloud/internal/validator"
 
-	fmpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 	msgpb "xmanager_cloud/api/protos/experiment"
 	actuatortaskpb "xmanager_cloud/api/protos/task_queue"
 	xidmsgpb "xmanager_cloud/api/protos/xid"
@@ -501,42 +500,9 @@ func TestBatchStopWorkUnits_SchedulingPausedTransitionsDirectlyToStopped(t *test
 		t.Fatalf("ValidateExperimentName() returned an unexpected error: %v", err)
 	}
 
-	exec1, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, workUnitID1)
-	if err != nil {
-		t.Fatalf("FetchCurrentWorkUnitExecution() for work unit 1 returned an unexpected error: %v", err)
-	}
-	exec2, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, workUnitID2)
-	if err != nil {
-		t.Fatalf("FetchCurrentWorkUnitExecution() for work unit 2 returned an unexpected error: %v", err)
-	}
-
 	// Transition both work units to SCHEDULING_PAUSED.
-	if _, err := server.WorkUnitHandler.workUnitUpdater.UpdateWorkUnitExecutions(ctx, xid, []*storage.WorkUnitExecutionUpdate{
-		{
-			WID: workUnitID1,
-			EID: 1,
-			WorkUnitExecution: &msgpb.WorkUnitExecution{
-				Status: &msgpb.WorkUnitStatus{
-					State:           msgpb.WorkUnitStatus_SCHEDULING_PAUSED,
-					StateUpdateTime: exec1.GetStatus().GetStateUpdateTime(),
-				},
-			},
-			UpdateMask: &fmpb.FieldMask{Paths: []string{"status.state"}},
-		},
-		{
-			WID: workUnitID2,
-			EID: 1,
-			WorkUnitExecution: &msgpb.WorkUnitExecution{
-				Status: &msgpb.WorkUnitStatus{
-					State:           msgpb.WorkUnitStatus_SCHEDULING_PAUSED,
-					StateUpdateTime: exec2.GetStatus().GetStateUpdateTime(),
-				},
-			},
-			UpdateMask: &fmpb.FieldMask{Paths: []string{"status.state"}},
-		},
-	}); err != nil {
-		t.Fatalf("UpdateWorkUnitExecutions() returned an unexpected error: %v", err)
-	}
+	mustSetWorkUnitState(ctx, t, server, xid, workUnitID1, msgpb.WorkUnitStatus_SCHEDULING_PAUSED)
+	mustSetWorkUnitState(ctx, t, server, xid, workUnitID2, msgpb.WorkUnitStatus_SCHEDULING_PAUSED)
 
 	taskQueueClient.EnqueuedTasks = nil // Clear state before BatchStopWorkUnits
 
@@ -607,42 +573,9 @@ func TestBatchStopWorkUnits_MixedSchedulingPausedAndRunning(t *testing.T) {
 		t.Fatalf("ValidateExperimentName() returned an unexpected error: %v", err)
 	}
 
-	exec1, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, workUnitID1)
-	if err != nil {
-		t.Fatalf("FetchCurrentWorkUnitExecution() for work unit 1 returned an unexpected error: %v", err)
-	}
-	exec2, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, workUnitID2)
-	if err != nil {
-		t.Fatalf("FetchCurrentWorkUnitExecution() for work unit 2 returned an unexpected error: %v", err)
-	}
-
 	// Transition workUnit1 to RUNNING and workUnit2 to SCHEDULING_PAUSED.
-	if _, err := server.WorkUnitHandler.workUnitUpdater.UpdateWorkUnitExecutions(ctx, xid, []*storage.WorkUnitExecutionUpdate{
-		{
-			WID: workUnitID1,
-			EID: 1,
-			WorkUnitExecution: &msgpb.WorkUnitExecution{
-				Status: &msgpb.WorkUnitStatus{
-					State:           msgpb.WorkUnitStatus_RUNNING,
-					StateUpdateTime: exec1.GetStatus().GetStateUpdateTime(),
-				},
-			},
-			UpdateMask: &fmpb.FieldMask{Paths: []string{"status.state"}},
-		},
-		{
-			WID: workUnitID2,
-			EID: 1,
-			WorkUnitExecution: &msgpb.WorkUnitExecution{
-				Status: &msgpb.WorkUnitStatus{
-					State:           msgpb.WorkUnitStatus_SCHEDULING_PAUSED,
-					StateUpdateTime: exec2.GetStatus().GetStateUpdateTime(),
-				},
-			},
-			UpdateMask: &fmpb.FieldMask{Paths: []string{"status.state"}},
-		},
-	}); err != nil {
-		t.Fatalf("UpdateWorkUnitExecutions() returned an unexpected error: %v", err)
-	}
+	mustSetWorkUnitState(ctx, t, server, xid, workUnitID1, msgpb.WorkUnitStatus_RUNNING)
+	mustSetWorkUnitState(ctx, t, server, xid, workUnitID2, msgpb.WorkUnitStatus_SCHEDULING_PAUSED)
 
 	taskQueueClient.EnqueuedTasks = nil // Clear state before BatchStopWorkUnits
 
@@ -683,171 +616,119 @@ func TestBatchStopWorkUnits_MixedSchedulingPausedAndRunning(t *testing.T) {
 	}
 }
 
-func TestBatchStopWorkUnits_SkipsTerminalAndStoppingWorkUnits(t *testing.T) {
+func TestBatchStopWorkUnits_StateFiltering(t *testing.T) {
 	ctx := context.Background()
-	server, taskQueueClient := createExperimentStateServer(ctx, t)
 
-	exp := &msgpb.Experiment{
-		Title: "test experiment for batchstopworkunits terminal states",
-		Acls: &xidmsgpb.XidAcls{
-			Owners: []*xidmsgpb.XidAcls_Role{{Principal: &xidmsgpb.XidAcls_Role_User{User: "test@example.com"}}},
+	testCases := []struct {
+		name             string
+		initialStates    map[int64]msgpb.WorkUnitStatus_WorkUnitState
+		wantDone         bool
+		wantEmptyOpName  bool
+		wantEnqueuedWIDs []int64
+		wantFinalStates  map[int64]msgpb.WorkUnitStatus_WorkUnitState
+	}{
+		{
+			name: "mixed_states_stops_running_failed_and_stopping_and_skips_completed_and_stopped",
+			initialStates: map[int64]msgpb.WorkUnitStatus_WorkUnitState{
+				1: msgpb.WorkUnitStatus_RUNNING,
+				2: msgpb.WorkUnitStatus_COMPLETED,
+				3: msgpb.WorkUnitStatus_FAILED,
+				4: msgpb.WorkUnitStatus_STOPPED,
+				5: msgpb.WorkUnitStatus_STOPPING,
+			},
+			wantDone:         false,
+			wantEmptyOpName:  false,
+			wantEnqueuedWIDs: []int64{1, 3, 5},
+			wantFinalStates: map[int64]msgpb.WorkUnitStatus_WorkUnitState{
+				1: msgpb.WorkUnitStatus_STOPPING,
+				2: msgpb.WorkUnitStatus_COMPLETED,
+				3: msgpb.WorkUnitStatus_FAILED,
+				4: msgpb.WorkUnitStatus_STOPPED,
+				5: msgpb.WorkUnitStatus_STOPPING,
+			},
+		},
+		{
+			name: "all_completed_or_stopped_returns_done",
+			initialStates: map[int64]msgpb.WorkUnitStatus_WorkUnitState{
+				1: msgpb.WorkUnitStatus_COMPLETED,
+				2: msgpb.WorkUnitStatus_STOPPED,
+			},
+			wantDone:         true,
+			wantEmptyOpName:  true,
+			wantEnqueuedWIDs: nil,
+			wantFinalStates: map[int64]msgpb.WorkUnitStatus_WorkUnitState{
+				1: msgpb.WorkUnitStatus_COMPLETED,
+				2: msgpb.WorkUnitStatus_STOPPED,
+			},
 		},
 	}
-	createdExp := mustCreateExperiment(ctx, t, server, exp)
-	xid, err := validator.ValidateExperimentName(createdExp.GetName())
-	if err != nil {
-		t.Fatalf("ValidateExperimentName() returned an unexpected error: %v", err)
-	}
 
-	initialStates := []struct {
-		wid   int64
-		state msgpb.WorkUnitStatus_WorkUnitState
-	}{
-		{wid: 1, state: msgpb.WorkUnitStatus_RUNNING},
-		{wid: 2, state: msgpb.WorkUnitStatus_COMPLETED},
-		{wid: 3, state: msgpb.WorkUnitStatus_FAILED},
-		{wid: 4, state: msgpb.WorkUnitStatus_STOPPED},
-		{wid: 5, state: msgpb.WorkUnitStatus_STOPPING},
-	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, taskQueueClient := createExperimentStateServer(ctx, t)
 
-	var updates []*storage.WorkUnitExecutionUpdate
-	for _, item := range initialStates {
-		wu := &msgpb.WorkUnit{
-			WorkUnitType: msgpb.WorkUnit_STANDARD,
-			Executable:   testExecutable,
-		}
-		_ = mustCreateWorkUnit(ctx, t, server, createdExp.GetName(), item.wid, wu)
-		exec, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, item.wid)
-		if err != nil {
-			t.Fatalf("FetchCurrentWorkUnitExecution() for work unit %d returned error: %v", item.wid, err)
-		}
-		updates = append(updates, &storage.WorkUnitExecutionUpdate{
-			WID: item.wid,
-			EID: 1,
-			WorkUnitExecution: &msgpb.WorkUnitExecution{
-				Status: &msgpb.WorkUnitStatus{
-					State:           item.state,
-					StateUpdateTime: exec.GetStatus().GetStateUpdateTime(),
+			exp := &msgpb.Experiment{
+				Title: "test experiment for batchstopworkunits state filtering",
+				Acls: &xidmsgpb.XidAcls{
+					Owners: []*xidmsgpb.XidAcls_Role{{Principal: &xidmsgpb.XidAcls_Role_User{User: "test@example.com"}}},
 				},
-			},
-			UpdateMask: &fmpb.FieldMask{Paths: []string{"status.state"}},
+			}
+			createdExp := mustCreateExperiment(ctx, t, server, exp)
+			xid, err := validator.ValidateExperimentName(createdExp.GetName())
+			if err != nil {
+				t.Fatalf("ValidateExperimentName() returned an unexpected error: %v", err)
+			}
+
+			wids := make([]int64, 0, len(tc.initialStates))
+			for wid := range tc.initialStates {
+				wids = append(wids, wid)
+			}
+			sort.Slice(wids, func(i, j int) bool { return wids[i] < wids[j] })
+
+			for _, wid := range wids {
+				wu := &msgpb.WorkUnit{
+					WorkUnitType: msgpb.WorkUnit_STANDARD,
+					Executable:   testExecutable,
+				}
+				_ = mustCreateWorkUnit(ctx, t, server, createdExp.GetName(), wid, wu)
+				mustSetWorkUnitState(ctx, t, server, xid, wid, tc.initialStates[wid])
+			}
+			taskQueueClient.EnqueuedTasks = nil
+
+			op, err := server.BatchStopWorkUnits(ctx, &msgpb.BatchStopWorkUnitsRequest{Parent: createdExp.GetName()})
+			if err != nil {
+				t.Fatalf("BatchStopWorkUnits() returned an unexpected error: %v", err)
+			}
+			if op.GetDone() != tc.wantDone {
+				t.Errorf("BatchStopWorkUnits() returned op.GetDone()=%v, want %v", op.GetDone(), tc.wantDone)
+			}
+			if (op.GetName() == "") != tc.wantEmptyOpName {
+				t.Errorf("BatchStopWorkUnits() returned op.GetName()=%q, wantEmptyOpName=%v", op.GetName(), tc.wantEmptyOpName)
+			}
+
+			if len(taskQueueClient.EnqueuedTasks) != len(tc.wantEnqueuedWIDs) {
+				t.Fatalf("BatchStopWorkUnits() enqueued %d tasks, want %d", len(taskQueueClient.EnqueuedTasks), len(tc.wantEnqueuedWIDs))
+			}
+			for i, wantWID := range tc.wantEnqueuedWIDs {
+				wantName := fmt.Sprintf("%s/workUnits/%d", createdExp.GetName(), wantWID)
+				if taskQueueClient.EnqueuedTasks[i].WorkUnit.GetName() != wantName {
+					t.Errorf("Enqueued task %d work unit name got %q, want %q", i, taskQueueClient.EnqueuedTasks[i].WorkUnit.GetName(), wantName)
+				}
+				if taskQueueClient.EnqueuedTasks[i].Action == nil || taskQueueClient.EnqueuedTasks[i].Action.GetDelete() == nil {
+					t.Errorf("Enqueued task %d action got %v, want DeleteAction", i, taskQueueClient.EnqueuedTasks[i].Action)
+				}
+			}
+
+			for wid, wantState := range tc.wantFinalStates {
+				exec, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, wid)
+				if err != nil {
+					t.Fatalf("FetchCurrentWorkUnitExecution() for work unit %d returned error: %v", wid, err)
+				}
+				if exec.GetStatus().GetState() != wantState {
+					t.Errorf("Work unit %d state got %v, want %v", wid, exec.GetStatus().GetState(), wantState)
+				}
+			}
 		})
-	}
-
-	if _, err := server.WorkUnitHandler.workUnitUpdater.UpdateWorkUnitExecutions(ctx, xid, updates); err != nil {
-		t.Fatalf("UpdateWorkUnitExecutions() returned an unexpected error: %v", err)
-	}
-	taskQueueClient.EnqueuedTasks = nil
-
-	op, err := server.BatchStopWorkUnits(ctx, &msgpb.BatchStopWorkUnitsRequest{Parent: createdExp.GetName()})
-	if err != nil {
-		t.Fatalf("BatchStopWorkUnits() returned an unexpected error: %v", err)
-	}
-	if op.GetDone() {
-		t.Errorf("BatchStopWorkUnits() returned op.GetDone()=true, want false")
-	}
-
-	// Only work unit 1 (RUNNING) should have a DeleteAction task enqueued.
-	if len(taskQueueClient.EnqueuedTasks) != 1 {
-		t.Fatalf("BatchStopWorkUnits() enqueued %d tasks, want 1", len(taskQueueClient.EnqueuedTasks))
-	}
-	wantName := fmt.Sprintf("%s/workUnits/1", createdExp.GetName())
-	if taskQueueClient.EnqueuedTasks[0].WorkUnit.GetName() != wantName {
-		t.Errorf("Enqueued task work unit name got %q, want %q", taskQueueClient.EnqueuedTasks[0].WorkUnit.GetName(), wantName)
-	}
-
-	wantFinalStates := map[int64]msgpb.WorkUnitStatus_WorkUnitState{
-		1: msgpb.WorkUnitStatus_STOPPING,
-		2: msgpb.WorkUnitStatus_COMPLETED,
-		3: msgpb.WorkUnitStatus_FAILED,
-		4: msgpb.WorkUnitStatus_STOPPED,
-		5: msgpb.WorkUnitStatus_STOPPING,
-	}
-	for wid, wantState := range wantFinalStates {
-		exec, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, wid)
-		if err != nil {
-			t.Fatalf("FetchCurrentWorkUnitExecution() for work unit %d returned error: %v", wid, err)
-		}
-		if exec.GetStatus().GetState() != wantState {
-			t.Errorf("Work unit %d state got %v, want %v", wid, exec.GetStatus().GetState(), wantState)
-		}
-	}
-}
-
-func TestBatchStopWorkUnits_AllTerminalOrStoppingReturnsDone(t *testing.T) {
-	ctx := context.Background()
-	server, taskQueueClient := createExperimentStateServer(ctx, t)
-
-	exp := &msgpb.Experiment{
-		Title: "test experiment for batchstopworkunits all terminal",
-		Acls: &xidmsgpb.XidAcls{
-			Owners: []*xidmsgpb.XidAcls_Role{{Principal: &xidmsgpb.XidAcls_Role_User{User: "test@example.com"}}},
-		},
-	}
-	createdExp := mustCreateExperiment(ctx, t, server, exp)
-	xid, err := validator.ValidateExperimentName(createdExp.GetName())
-	if err != nil {
-		t.Fatalf("ValidateExperimentName() returned an unexpected error: %v", err)
-	}
-
-	nonStoppableStates := []struct {
-		wid   int64
-		state msgpb.WorkUnitStatus_WorkUnitState
-	}{
-		{wid: 1, state: msgpb.WorkUnitStatus_COMPLETED},
-		{wid: 2, state: msgpb.WorkUnitStatus_FAILED},
-		{wid: 3, state: msgpb.WorkUnitStatus_STOPPED},
-		{wid: 4, state: msgpb.WorkUnitStatus_STOPPING},
-	}
-
-	var updates []*storage.WorkUnitExecutionUpdate
-	for _, item := range nonStoppableStates {
-		wu := &msgpb.WorkUnit{
-			WorkUnitType: msgpb.WorkUnit_STANDARD,
-			Executable:   testExecutable,
-		}
-		_ = mustCreateWorkUnit(ctx, t, server, createdExp.GetName(), item.wid, wu)
-		exec, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, item.wid)
-		if err != nil {
-			t.Fatalf("FetchCurrentWorkUnitExecution() for work unit %d returned error: %v", item.wid, err)
-		}
-		updates = append(updates, &storage.WorkUnitExecutionUpdate{
-			WID: item.wid,
-			EID: 1,
-			WorkUnitExecution: &msgpb.WorkUnitExecution{
-				Status: &msgpb.WorkUnitStatus{
-					State:           item.state,
-					StateUpdateTime: exec.GetStatus().GetStateUpdateTime(),
-				},
-			},
-			UpdateMask: &fmpb.FieldMask{Paths: []string{"status.state"}},
-		})
-	}
-
-	if _, err := server.WorkUnitHandler.workUnitUpdater.UpdateWorkUnitExecutions(ctx, xid, updates); err != nil {
-		t.Fatalf("UpdateWorkUnitExecutions() returned an unexpected error: %v", err)
-	}
-	taskQueueClient.EnqueuedTasks = nil
-
-	op, err := server.BatchStopWorkUnits(ctx, &msgpb.BatchStopWorkUnitsRequest{Parent: createdExp.GetName()})
-	if err != nil {
-		t.Fatalf("BatchStopWorkUnits() returned an unexpected error: %v", err)
-	}
-	if !op.GetDone() {
-		t.Errorf("BatchStopWorkUnits() returned op.GetDone()=false, want true")
-	}
-	if len(taskQueueClient.EnqueuedTasks) != 0 {
-		t.Fatalf("BatchStopWorkUnits() enqueued %d tasks, want 0", len(taskQueueClient.EnqueuedTasks))
-	}
-
-	for _, item := range nonStoppableStates {
-		exec, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, item.wid)
-		if err != nil {
-			t.Fatalf("FetchCurrentWorkUnitExecution() for work unit %d returned error: %v", item.wid, err)
-		}
-		if exec.GetStatus().GetState() != item.state {
-			t.Errorf("Work unit %d state got %v, want %v", item.wid, exec.GetStatus().GetState(), item.state)
-		}
 	}
 }
 
@@ -899,7 +780,7 @@ func TestIsWorkUnitStoppable(t *testing.T) {
 					Status: &msgpb.WorkUnitStatus{State: msgpb.WorkUnitStatus_STOPPING},
 				},
 			},
-			want: false,
+			want: true,
 		},
 		{
 			name: "completed_state",
@@ -921,7 +802,7 @@ func TestIsWorkUnitStoppable(t *testing.T) {
 					Status: &msgpb.WorkUnitStatus{State: msgpb.WorkUnitStatus_FAILED},
 				},
 			},
-			want: false,
+			want: true,
 		},
 		{
 			name: "stopped_state",

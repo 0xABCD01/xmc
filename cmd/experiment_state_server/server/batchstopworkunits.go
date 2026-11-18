@@ -23,7 +23,6 @@ import (
 	"xmanager_cloud/internal/grpcerr"
 	"xmanager_cloud/internal/logging"
 	"xmanager_cloud/internal/storage"
-	"xmanager_cloud/internal/storage/state"
 	"xmanager_cloud/internal/task_queue"
 	"xmanager_cloud/internal/validator"
 
@@ -120,12 +119,20 @@ type WorkUnitStopEnqueueResult struct {
 	ExecutionUpdate *storage.WorkUnitExecutionUpdate
 }
 
-// filterStoppableWorkUnits returns only work units that are not already in a terminal or stopping state.
+// stopSkippedStates lists states where no live JobSet can remain, so a Delete would be a no-op.
+// FAILED is excluded: startup failures (e.g. ImagePullBackOff) leave an admitted JobSet behind.
+// STOPPING is excluded: re-stopping is the recovery path for a lost or out-of-order DeleteAction.
+var stopSkippedStates = []msgpb.WorkUnitStatus_WorkUnitState{
+	msgpb.WorkUnitStatus_STOPPED,
+	msgpb.WorkUnitStatus_COMPLETED,
+}
+
+// filterStoppableWorkUnits returns only work units that are not already in a completed or stopped state.
 func filterStoppableWorkUnits(ctx context.Context, workUnits []*msgpb.WorkUnit) []*msgpb.WorkUnit {
 	stoppable := make([]*msgpb.WorkUnit, 0, len(workUnits))
 	for _, workUnit := range workUnits {
 		if !isWorkUnitStoppable(workUnit) {
-			logging.Info(ctx, "Skipping stop for work unit in terminal or stopping state",
+			logging.Info(ctx, "Skipping stop for work unit in completed or stopped state",
 				"work_unit", workUnit.GetName(),
 				"state", workUnit.GetCurrentWorkUnitExecution().GetStatus().GetState(),
 			)
@@ -142,10 +149,7 @@ func isWorkUnitStoppable(workUnit *msgpb.WorkUnit) bool {
 		return false
 	}
 	currentState := workUnit.GetCurrentWorkUnitExecution().GetStatus().GetState()
-	if currentState == msgpb.WorkUnitStatus_STOPPING {
-		return false
-	}
-	return !slices.Contains(state.WorkUnitTerminalStates, currentState)
+	return !slices.Contains(stopSkippedStates, currentState)
 }
 
 // enqueueWorkUnitStop handles the stopping process for a single work unit.

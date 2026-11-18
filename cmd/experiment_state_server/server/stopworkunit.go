@@ -71,7 +71,7 @@ func (h *WorkUnitHandler) StopWorkUnit(ctx context.Context, req *msgpb.StopWorkU
 	}
 
 	if !isWorkUnitStoppable(workUnit) {
-		logging.Info(ctx, "Skipping stop for work unit in terminal or stopping state",
+		logging.Info(ctx, "Skipping stop for work unit in completed or stopped state",
 			"state", workUnit.GetCurrentWorkUnitExecution().GetStatus().GetState(),
 		)
 		return &lropb.Operation{Done: true}, nil
