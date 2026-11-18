@@ -161,7 +161,7 @@ go_test(
     ],
 )
 
-# Test-only fixtures of profile_migration_test: admin values, the stable-2026b overlay and the
+# Test-only fixtures of profile_migration_test: admin values, the stable-2099z overlay and the
 # rolling-gateway stand-in chart.
 filegroup(
     name = "profile_migration_testdata",

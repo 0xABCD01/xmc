@@ -55,7 +55,8 @@ var contractChecks = []contractCheck{
 //   - RejectsInvalidInstalls: the values schema and the release-name guard reject invalid installs.
 //   - ComponentFileErrors: missing or invalid component files fail with a message naming the file.
 //   - CatalogIsConsistent: components/ directories, values.yaml, the schema and the render agree.
-//   - MetadataIsConsistent: the profile name and profile.yaml metadata are consistent.
+//   - MetadataIsConsistent: the profile name and profile.yaml metadata (including the optional
+//     status: preview | stable, stable when omitted) are consistent.
 func Run(t *testing.T, s Spec) {
 	t.Helper()
 	fatalOnError(t, validateSpec(s))

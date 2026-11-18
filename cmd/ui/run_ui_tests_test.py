@@ -76,13 +76,40 @@ class MainTest(unittest.TestCase):
     @mock.patch.object(run_ui_tests.subprocess, "run")
     @mock.patch.object(run_ui_tests, "missing_dependencies_error", return_value=None)
     def test_exits_with_ng_test_return_code_when_dependencies_are_installed(self, _, mock_run):
-        mock_run.return_value.returncode = 3
-        with mock.patch.object(sys, "stdout", io.StringIO()), self.assertRaises(SystemExit) as cm:
-            run_ui_tests.main()
+        cases = [
+            (
+                "nvm_sh_present",
+                True,
+                ["bash", "-c", "source /fake/home/.nvm/nvm.sh && npx ng test --watch=false"],
+            ),
+            (
+                "nvm_sh_absent",
+                False,
+                ["npx", "ng", "test", "--watch=false"],
+            ),
+        ]
+        for label, nvm_exists, expected_cmd in cases:
+            with self.subTest(case=label):
+                mock_run.reset_mock()
+                mock_run.return_value.returncode = 3
+                passwd_entry = mock.Mock(pw_dir="/fake/home")
+                with (
+                    mock.patch.object(run_ui_tests.pwd, "getpwuid", return_value=passwd_entry),
+                    mock.patch.object(
+                        run_ui_tests.os.path, "exists", return_value=nvm_exists
+                    ) as mock_exists,
+                    mock.patch.object(sys, "stdout", io.StringIO()),
+                    self.assertRaises(SystemExit) as cm,
+                ):
+                    run_ui_tests.main()
 
-        self.assertEqual(cm.exception.code, 3)
-        mock_run.assert_called_once()
-        self.assertIn("ng test --watch=false", mock_run.call_args.args[0])
+                self.assertEqual(cm.exception.code, 3)
+                mock_exists.assert_called_once_with("/fake/home/.nvm/nvm.sh")
+                mock_run.assert_called_once()
+                cmd_args = mock_run.call_args.args[0]
+                self.assertIsInstance(cmd_args, list)
+                self.assertEqual(cmd_args, expected_cmd)
+                self.assertFalse(mock_run.call_args.kwargs.get("shell", False))
 
 
 if __name__ == "__main__":

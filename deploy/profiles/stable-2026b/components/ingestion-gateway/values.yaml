@@ -1,0 +1,20 @@
+# Copyright 2026 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+# Metadata-only component chart: values read by templates/component.yaml. xmc-bridge installs the
+# xmc-cmp-ingestion-gateway workload from the stable-2026a chart of the same name and version, with
+# that chart's own workload defaults.
+enabled: false
+stability: "STABLE"
+namespace: ""
+global: { imageTag: "" }
+imageTag: ""
+deletionProtection: true
+deletionPolicy: "Delete"
+dependencies: ["redpanda", "clickhouse"]
+parameters:
+  port: 8080
+  redpandaBrokers: "redpanda-0.redpanda.xmc.svc.cluster.local:9092"
+  topicName: "xmc-metrics"
+  minPartitions: 128
+  minReplicas: 1
+ingestionGatewayDeployment: {}

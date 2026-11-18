@@ -14,6 +14,7 @@
 package equalityvisitor
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -208,5 +209,53 @@ func TestEquality(t *testing.T) {
 				t.Errorf("got: %v, want: %v", m, tc.expected)
 			}
 		}
+	}
+}
+
+func TestPropagateError(t *testing.T) {
+	baseErr := errors.New("boom")
+
+	tests := []struct {
+		name     string
+		err      error
+		ctx      string
+		wantNil  bool
+		wantMsg  string
+		wantWrap error
+	}{
+		{
+			name:    "nil error returns nil",
+			err:     nil,
+			ctx:     "element 0",
+			wantNil: true,
+		},
+		{
+			name:     "non-nil error wraps original error with %w",
+			err:      baseErr,
+			ctx:      "element 0",
+			wantMsg:  "element 0: boom",
+			wantWrap: baseErr,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := propagateError(tc.err, tc.ctx)
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("propagateError(nil, %q) = %v, want nil", tc.ctx, got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("propagateError(%v, %q) = nil, want %q", tc.err, tc.ctx, tc.wantMsg)
+			}
+			if got.Error() != tc.wantMsg {
+				t.Errorf("propagateError(%v, %q).Error() = %q, want %q", tc.err, tc.ctx, got.Error(), tc.wantMsg)
+			}
+			if !errors.Is(got, tc.wantWrap) {
+				t.Errorf("errors.Is(propagateError(%v, %q), %v) = false, want true", tc.err, tc.ctx, tc.wantWrap)
+			}
+		})
 	}
 }

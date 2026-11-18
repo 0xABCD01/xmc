@@ -29,6 +29,11 @@ select = [
     "W",       # pycodestyle warnings
     "F",       # Pyflakes
     "I",       # isort (import sorting)
+    "ANN001",  # flake8-annotations: Missing type annotation for function argument
+    "ANN201",  # flake8-annotations: Missing return type annotation for public function
+    "ANN202",  # flake8-annotations: Missing return type annotation for private function
+    "ARG",     # flake8-unused-arguments: Unused function/method/lambda arguments
+    "SLF001",  # flake8-self: Private member access outside class/module
     "D417",    # Missing argument description in docstrings
     "B",       # flake8-bugbear (bug prevention & exception handling)
     "PERF",    # perflint (performance anti-patterns & loop allocations)
@@ -58,10 +63,18 @@ select = [
     "RUF013",  # Ruff: Implicit Optional in type annotations
     "RUF015",  # Ruff: Prefer next(iter()) over list()[0]
     "RUF019",  # Ruff: Unnecessary key check before dictionary access
+    "LOG015",  # flake8-logging: Forbid calls on root logger
+    "PLR0911", # Pylint: Too many return statements
+    "PLR0912", # Pylint: Too many branches
+    "PLR0915", # Pylint: Too many statements
+    "RUF012",  # Ruff: Mutable class default values
+    "RUF100",  # Ruff: Unused noqa directives
+    "S110",    # Bandit: try-except-pass without logging
     "S506",    # Bandit: Probable use of unsafe yaml.load
+    "S602",    # Bandit: subprocess call with shell=True
     "C901",    # mccabe: Cyclomatic complexity enforcement
 ]
-ignore = ["B904", "SIM102", "SIM105", "SIM117", "E501", "PERF203"]
+ignore = ["SIM117", "E501", "PERF203"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15
@@ -78,6 +91,12 @@ convention = "google"
 "test/e2e/*" = ["TID251"]
 # TODO: migrate to StrEnum
 "test/e2e/lib/config.py" = ["UP042"]
+# Relax annotation, unused-arg, and private-member checks in tests, generated migrations, example launchers, and framework callback hooks
+"*_test.py" = ["ANN001", "ANN201", "ANN202", "ARG", "SLF001"]
+"test_*.py" = ["ANN001", "ANN201", "ANN202", "ARG", "SLF001"]
+"internal/storage/*/migrations/**" = ["ANN001", "ANN201", "ANN202", "ARG", "SLF001"]
+"examples/**" = ["SLF001"]
+"sdks/python/xmc/integrations/*" = ["ARG002"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "time.time".msg = "Use time.monotonic() for measuring intervals, deadlines, and elapsed time."
@@ -100,6 +119,9 @@ warn_unused_configs = true
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+warn_unreachable = true
+strict_equality = true
+enable_error_code = ["ignore-without-code"]
 exclude = [
     '(^|/)node_modules/',
     '(^|/)test/regression/',

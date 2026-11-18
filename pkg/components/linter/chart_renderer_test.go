@@ -101,7 +101,7 @@ upper: "MIXEDCASE"`,
 
 func boolPtr(v bool) *bool { return &v }
 
-// profileCRAnnotations returns the annotations every stable-2026a Component CR renders with.
+// profileCRAnnotations returns the annotations every profile Component CR renders with.
 func profileCRAnnotations() map[string]string {
 	return map[string]string{"argocd.argoproj.io/sync-options": "SkipDryRunOnMissingResource=true"}
 }
@@ -913,7 +913,7 @@ func TestStable2026aProfileDAGValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			writeTestManifest(t, dir, "rendered.yaml", renderStable2026aProfile(t, profileDir, tt.overrides))
+			writeTestManifest(t, dir, "rendered.yaml", renderProfile(t, profileDir, "stable-2026a", tt.overrides))
 			got, err := linter.NewLinter(rules).ValidateDirectory(dir)
 			if err != nil {
 				t.Fatalf("ValidateDirectory() error: %v", err)
@@ -928,15 +928,124 @@ func TestStable2026aProfileDAGValidation(t *testing.T) {
 	}
 }
 
-// renderStable2026aProfile renders the stable-2026a profile meta-chart with the given
+// TestStable2026bExperimentalBlueprints checks the vizier and hpo Component CRs that stable-2026b
+// ships, rendered from their standalone component charts.
+func TestStable2026bExperimentalBlueprints(t *testing.T) {
+	t.Parallel()
+	crdPath := resolveRepoPath(t, filepath.Join("deploy", "helm", "templates", "components", "crd.yaml"))
+	metadata := func(name string, extraLabels map[string]string) linter.ObjectMetadata {
+		labels := map[string]string{"xmc.dev/profile": "stable-2026b", "app.kubernetes.io/name": name, "app.kubernetes.io/managed-by": "Helm"}
+		for k, v := range extraLabels {
+			labels[k] = v
+		}
+		return linter.ObjectMetadata{Name: name, Namespace: "xmc", Labels: labels, Annotations: profileCRAnnotations()}
+	}
+	tests := []struct {
+		component string
+		want      linter.ComponentManifest
+	}{
+		{
+			component: "vizier",
+			want: linter.ComponentManifest{APIVersion: "xmc.dev/v1alpha1", Kind: "Component", Metadata: metadata("vizier", nil),
+				Spec: linter.ComponentManifestSpec{Enabled: boolPtr(false), ComponentType: "COMPONENT_TYPE_CUSTOM_3P_WRAPPER", ComponentClass: "optimization-engine",
+					Version: "0.1.0", ChartVersion: "0.1.0", Stability: "EXPERIMENTAL", DeletionProtection: true, DeletionPolicy: "Delete",
+					Parameters: map[string]string{"endpoint": "vizier-service.xmc.svc.cluster.local:7077"}}},
+		},
+		{
+			component: "hpo",
+			want: linter.ComponentManifest{APIVersion: "xmc.dev/v1alpha1", Kind: "Component", Metadata: metadata("hpo", map[string]string{"xmc.dev/component-type": "custom-1p-component"}),
+				Spec: linter.ComponentManifestSpec{Enabled: boolPtr(false), ComponentType: "COMPONENT_TYPE_CUSTOM_1P_COMPONENT", ComponentClass: "hyperparameter-optimization",
+					Version: "0.1.0", ChartVersion: "0.1.0", Stability: "EXPERIMENTAL", DeletionProtection: true, DeletionPolicy: "Delete",
+					Parameters:   map[string]string{"maxTrialBudget": "1000"},
+					Dependencies: []linter.ComponentDependencyRef{{Name: "vizier"}, {Name: "clickhouse"}}}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.component, func(t *testing.T) {
+			t.Parallel()
+			verifyBlueprintChart(t, resolveRepoPath(t, filepath.Join("deploy", "profiles", "stable-2026b", "components", tc.component)), crdPath, tc.want)
+		})
+	}
+}
+
+func TestStable2026bProfileDAGValidation(t *testing.T) {
+	t.Parallel()
+
+	profileDir := resolveRepoPath(t, filepath.Join("deploy", "profiles", "stable-2026b"))
+	rules, err := linter.LoadRules(filepath.Join(profileDir, "rules.yaml"))
+	if err != nil {
+		t.Fatalf("LoadRules(stable-2026b) failed: %v", err)
+	}
+	if !rules.StaticChecks.IsExperimentalAllowed() {
+		t.Fatal("stable-2026b rules.yaml StaticChecks.IsExperimentalAllowed() = false, want true")
+	}
+
+	tests := []struct {
+		name      string
+		overrides map[string]any
+		wantValid bool
+		wantRules []string
+	}{
+		{name: "default profile renders valid with disabled experimental components", overrides: map[string]any{}, wantValid: true},
+		{
+			name:      "vizier enabled without acknowledgeExperimental fails",
+			overrides: map[string]any{"vizier": map[string]any{"enabled": true}},
+			wantRules: []string{"EXPERIMENTAL_NOT_ACKNOWLEDGED"},
+		},
+		{
+			name: "hpo enabled without acknowledgeExperimental fails",
+			overrides: map[string]any{"vizier": map[string]any{"enabled": true, "acknowledgeExperimental": true},
+				"clickhouse": map[string]any{"enabled": true}, "hpo": map[string]any{"enabled": true}},
+			wantRules: []string{"EXPERIMENTAL_NOT_ACKNOWLEDGED"},
+		},
+		{
+			name: "hpo enabled with disabled vizier fails DAG and compatibility matrix",
+			overrides: map[string]any{"vizier": map[string]any{"enabled": false},
+				"clickhouse": map[string]any{"enabled": true}, "hpo": map[string]any{"enabled": true, "acknowledgeExperimental": true}},
+			wantRules: []string{"DISABLED_DEPENDENCY", "REQUIRED_COMPONENT_MISSING"},
+		},
+		{
+			name: "vizier clickhouse and hpo enabled with acknowledgeExperimental passes without stability inversion",
+			overrides: map[string]any{"vizier": map[string]any{"enabled": true, "acknowledgeExperimental": true},
+				"clickhouse": map[string]any{"enabled": true}, "hpo": map[string]any{"enabled": true, "acknowledgeExperimental": true}},
+			wantValid: true,
+		},
+		{
+			name: "STABLE ingestion-gateway depending on EXPERIMENTAL hpo fails STABILITY_INVERSION",
+			overrides: map[string]any{"vizier": map[string]any{"enabled": true, "acknowledgeExperimental": true},
+				"clickhouse": map[string]any{"enabled": true}, "redpanda": map[string]any{"enabled": true},
+				"hpo":               map[string]any{"enabled": true, "acknowledgeExperimental": true},
+				"ingestion-gateway": map[string]any{"enabled": true, "dependencies": []any{"redpanda", "clickhouse", "hpo"}}},
+			wantRules: []string{"STABILITY_INVERSION"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTestManifest(t, dir, "rendered.yaml", renderProfile(t, profileDir, "stable-2026b", tt.overrides))
+			got, err := linter.NewLinter(rules).ValidateDirectory(dir)
+			if err != nil {
+				t.Fatalf("ValidateDirectory() error: %v", err)
+			}
+			if got.Valid != tt.wantValid {
+				t.Fatalf("ValidateDirectory() valid = %v, want %v (errors: %+v)", got.Valid, tt.wantValid, got.Errors)
+			}
+			if !tt.wantValid {
+				assertDiagnosticRules(t, got, tt.wantRules)
+			}
+		})
+	}
+}
+
+// renderProfile renders the named profile meta-chart at profileDir with the given
 // components.<name> overrides, as an admin would with helm template -f values.yaml.
-func renderStable2026aProfile(t *testing.T, profileDir string, components map[string]any) string {
+func renderProfile(t *testing.T, profileDir, profile string, components map[string]any) string {
 	t.Helper()
 	rendered, err := renderChartWithValues(profileDir, "xmc-profile", map[string]any{"components": components})
 	if err != nil {
-		t.Fatalf("failed to render stable-2026a profile with components %v: %v", components, err)
+		t.Fatalf("failed to render %s profile with components %v: %v", profile, components, err)
 	}
-	return rendered["xmc-profile-stable-2026a/templates/components.yaml"]
+	return rendered["xmc-profile-"+profile+"/templates/components.yaml"]
 }
 
 func renderChartWithValues(chartRoot, releaseName string, overrides map[string]any) (map[string]string, error) {

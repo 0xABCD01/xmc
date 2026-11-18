@@ -62,6 +62,12 @@ type HelmComponentOptions struct {
 	ReleaseName string
 	// ChartPath specifies an optional explicit filesystem path to the component's Helm chart.
 	ChartPath string
+	// Profile is the Component's xmc.dev/profile label (ProfileLabel). It selects the embedded chart installed when no
+	// chart path applies; a missing or unknown profile selects DefaultProfile.
+	Profile string
+	// ChartVersion is the Component's spec.chartVersion. A profile falling back to the DefaultProfile chart of a
+	// metadata-only catalog entry requires that chart to have this version.
+	ChartVersion string
 	// Enabled indicates whether the component should be enabled in the Helm release.
 	Enabled bool
 	// ImageTag specifies an optional container image tag override.
@@ -122,7 +128,18 @@ func buildComponentDeploymentValues(opts HelmComponentOptions, effectiveTag, def
 	for k, v := range opts.RawValues {
 		compValues[k] = v
 	}
+	setBridgeRedisAddr(compValues)
 	return compValues
+}
+
+// setBridgeRedisAddr makes the bridge's REDIS_ADDR the only source of redisAddr: it replaces any
+// Component parameter or raw value, which could otherwise send the redis-secret password to
+// another host, and omits redisAddr when REDIS_ADDR is empty.
+func setBridgeRedisAddr(compValues map[string]any) {
+	delete(compValues, "redisAddr")
+	if addr := strings.TrimSpace(os.Getenv("REDIS_ADDR")); addr != "" {
+		compValues["redisAddr"] = addr
+	}
 }
 
 func defaultComponentEnvImageVar(componentName string) string {
@@ -333,6 +350,7 @@ func applyVersionAndImageTag(opts *HelmComponentOptions, specMap map[string]any)
 	if chartVer != "" && opts.ImageTag == chartVer {
 		opts.ImageTagFromChartVersion = true
 	}
+	opts.ChartVersion = chartVer
 	if tag, ok := specMap["imageTag"].(string); ok && strings.TrimSpace(tag) != "" {
 		opts.ImageTag = strings.TrimSpace(tag)
 		opts.ImageTagFromChartVersion = false

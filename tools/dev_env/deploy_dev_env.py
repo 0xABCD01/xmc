@@ -16,6 +16,7 @@
 """XMC v2 Dev Environment Deployment Script."""
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -34,11 +35,15 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.common.tool_utils import (  # noqa: E402
+    COMPONENT_PROFILES,
+    DEFAULT_COMPONENT_PROFILE,
     GREEN,
     NC,
     RED,
     DeploymentConfig,
+    add_allow_preview_profile_flag,
     build_and_push_images,
+    check_component_profile_status,
     configure_docker_auth,
     deploy_component_profile,
     ensure_venv,
@@ -112,6 +117,17 @@ def parse_args(args: list[str]) -> argparse.Namespace:
         default=None,
         help="Optional values YAML file passed to helm -f when deploying xmc-profile.",
     )
+    p.add_argument(
+        "--profile",
+        dest="component_profile",
+        choices=COMPONENT_PROFILES,
+        default=None,
+        help=(
+            "Component profile deployed as xmc-profile (default: the installed profile, "
+            f"or {DEFAULT_COMPONENT_PROFILE} on a fresh install)."
+        ),
+    )
+    add_allow_preview_profile_flag(p)
     parsed_args = p.parse_args(args)
     if parsed_args.start_from and parsed_args.only:
         p.error("Cannot specify both --start-from and --only.")
@@ -286,9 +302,26 @@ def run_checks(config: DeploymentConfig, dns_project: str, dns_zone: str) -> Non
         error_exit(
             f"Profile values file '{config.profile_values}' does not exist or is not a file."
         )
+    _check_preview_profile_allowed(config)
     _check_gcp_project_alignment(config.project_id)
     _check_dns_access(dns_project, dns_zone)
     log_success("All pre-flight checks passed.")
+
+
+def _check_preview_profile_allowed(config: DeploymentConfig) -> None:
+    """Exits before any change if --profile names a preview profile without the opt-in flag.
+
+    The cluster may not exist yet, so the explicit profile is checked as a fresh install;
+    deploy_component_profile repeats the check against the installed release.
+    """
+    if not config.component_profile:
+        return
+    try:
+        check_component_profile_status(
+            config.component_profile, None, allow_preview=config.allow_preview_profile
+        )
+    except (ValueError, OSError) as e:
+        error_exit(str(e))
 
 
 def _dns_transaction_abort(dns_project: str, dns_zone: str) -> None:
@@ -298,7 +331,7 @@ def _dns_transaction_abort(dns_project: str, dns_zone: str) -> None:
         dns_project: GCP Project ID hosting the DNS zone.
         dns_zone: Cloud DNS Managed Zone name.
     """
-    try:
+    with contextlib.suppress(subprocess.CalledProcessError):
         run_command(
             [
                 "gcloud",
@@ -311,9 +344,7 @@ def _dns_transaction_abort(dns_project: str, dns_zone: str) -> None:
             ],
             capture_output=True,
             log_on_error=False,
-        )
-    except subprocess.CalledProcessError:
-        pass  # Ignore if no transaction was active
+        )  # Ignore if no transaction was active
 
 
 def _dns_transaction_start(dns_project: str, dns_zone: str) -> None:
@@ -489,29 +520,29 @@ def run_gcluster_deploy(deployment_name: str, group: str) -> None:
 # --- Steps implementation ---
 
 
-def step_check(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_check(_config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Verifies pre-flight checks (noop step for status check).
 
     Args:
-        config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _config: The loaded DeploymentConfig instance (unused).
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     log_success("Pre-flight checks verified.")
 
 
 def step_compile(
     config: DeploymentConfig,
-    dns_project: str,
-    dns_zone: str,
+    _dns_project: str,
+    _dns_zone: str,
     config_path: str,
 ) -> None:
     """Compiles the XMC blueprint using gcluster.
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
         config_path: Path to the configuration file.
     """
     log_info("Compiling XMC blueprint using gcluster...")
@@ -519,13 +550,13 @@ def step_compile(
     log_success("Blueprint compiled successfully under 'ctk-out/'.")
 
 
-def step_apis(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_apis(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Deploys the APIs group (API enablement).
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     log_info("Deploying apis group (API enablement)...")
     run_gcluster_deploy(config.deployment_name, "apis")
@@ -587,26 +618,26 @@ def step_migrate(config: DeploymentConfig) -> None:
     apply_pending_migrations(config, pending)
 
 
-def step_compute(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_compute(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Deploys the compute group (GKE Cluster and Node pools).
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     log_info("Deploying compute group (GKE Cluster and Node pools)...")
     run_gcluster_deploy(config.deployment_name, "compute")
     log_success("Compute group (GKE cluster and Node pools) deployed successfully.")
 
 
-def step_gateway_api(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_gateway_api(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Enables GKE Gateway API on the cluster if not already enabled.
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
 
     Raises:
         RuntimeError: If cluster description fails.
@@ -650,13 +681,13 @@ def step_gateway_api(config: DeploymentConfig, dns_project: str, dns_zone: str) 
         log_info("Gateway API standard channel is already enabled.")
 
 
-def step_prereqs(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_prereqs(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Deploys kubernetes_prereqs group (cert-manager, Kueue, Jobset).
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     log_info("Deploying kubernetes_prereqs group (cert-manager, Kueue, Jobset)...")
     run_gcluster_deploy(config.deployment_name, "kubernetes_prereqs")
@@ -692,15 +723,15 @@ def _fetch_cluster_credentials(config: DeploymentConfig) -> None:
 
 def step_app(
     config: DeploymentConfig,
-    dns_project: str,
-    dns_zone: str,
+    _dns_project: str,
+    _dns_zone: str,
 ) -> None:
     """Deploys xmc_app group (Helm release) and triggers rolling restarts.
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone.
-        dns_zone: Cloud DNS Managed Zone name.
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     log_info("Deploying xmc_app group (Helm release)...")
     run_gcluster_deploy(config.deployment_name, "xmc_app")
@@ -799,13 +830,13 @@ def _build_verify_env(config: DeploymentConfig) -> dict[str, str]:
     }
 
 
-def step_verify(config: DeploymentConfig, dns_project: str, dns_zone: str) -> None:
+def step_verify(config: DeploymentConfig, _dns_project: str, _dns_zone: str) -> None:
     """Verifies the deployed XMC environment.
 
     Args:
         config: The loaded DeploymentConfig instance.
-        dns_project: GCP Project ID hosting the DNS zone (unused).
-        dns_zone: Cloud DNS Managed Zone name (unused).
+        _dns_project: GCP Project ID hosting the DNS zone (unused).
+        _dns_zone: Cloud DNS Managed Zone name (unused).
     """
     _fetch_cluster_credentials(config)
     wait_for_deployments_ready(config)
@@ -867,6 +898,10 @@ def _build_resume_cmd(args: argparse.Namespace, current_step: str) -> str:
         resume_cmd += "--skip-verification "
     if getattr(args, "profile_values", None):
         resume_cmd += f"--profile-values {shlex.quote(args.profile_values)} "
+    if getattr(args, "component_profile", None):
+        resume_cmd += f"--profile {shlex.quote(args.component_profile)} "
+    if getattr(args, "allow_preview_profile", False):
+        resume_cmd += "--allow-preview-profile "
     if args.only:
         resume_cmd += f"--only {current_step}"
     else:
@@ -894,6 +929,10 @@ def run_deployment(args: argparse.Namespace) -> None:
     config = load_and_validate_config(args.config)
     if getattr(args, "profile_values", None):
         config = replace(config, profile_values=args.profile_values)
+    if getattr(args, "component_profile", None):
+        config = replace(config, component_profile=args.component_profile)
+    if getattr(args, "allow_preview_profile", False):
+        config = replace(config, allow_preview_profile=True)
 
     run_checks(config, args.dns_project, args.dns_zone)
     step_map = _build_step_map(args, config)
