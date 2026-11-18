@@ -302,7 +302,7 @@ Instruct the agent:
 
 We provide automated HPC Cluster Toolkit blueprints to compile and deploy the entire GCP and GKE stack:
 
-1. **Step-by-step Compilation**: Follow the step-by-step instructions on compilation and group-by-group deployments in the [deploy/ctk_v2/README.md](deploy/ctk_v2/README.md).
+1. **Step-by-step Compilation**: Follow the step-by-step instructions on compilation and group-by-group deployments in the [deploy/ctk_v2/README.md](deploy/ctk_v2/README.md) (including [Terraform State Storage (`terraform.tfstate`)](deploy/ctk_v2/README.md#terraform-state-storage-terraformtfstate) guidance on storing infrastructure state outside repository worktrees via GCS or an external host directory).
 2. **Execute Deployment**: Run `gcluster deploy` command groups sequentially, checking resource state transitions as you go.
 3. **Install Optional Catalog Components (`stable-2026a` Profile)**: Every optional catalog component (`redpanda`, `clickhouse`, `ingestion-gateway`) is **disabled by default**. Create a `profile-values.yaml` that enables the ones you need (`redpanda`/`clickhouse` expect the BYO add-ons from [`deploy/addons/metrics`](deploy/addons/metrics/clickhouse/README.md) to be reachable), then install the [`stable-2026a` catalog profile](deploy/profiles/stable-2026a/README.md):
    ```yaml
@@ -319,6 +319,8 @@ We provide automated HPC Cluster Toolkit blueprints to compile and deploy the en
    helm upgrade --install --reset-then-reuse-values xmc-profile ./deploy/profiles/stable-2026a -n xmc -f profile-values.yaml --wait
    ```
    If `dashboard-service` was already running before you enabled `clickhouse` (or `bigquery`), wait until `xmc-bridge` has reconciled the enabled component (use `component.xmc.dev/bigquery` when enabling BigQuery) and then restart it once so it picks up the new data engine: `kubectl wait component.xmc.dev/clickhouse -n xmc --for=condition=Ready --timeout=120s && kubectl rollout restart deployment/dashboard-service-deployment -n xmc`.
+
+   XMC `1.0.1+` also ships the preview [`stable-2026b` profile](deploy/profiles/stable-2026b/README.md) (not released yet; it may change incompatibly), installed the same way from `./deploy/profiles/stable-2026b`.
 
 ---
 

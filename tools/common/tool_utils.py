@@ -24,12 +24,20 @@ import subprocess
 import sys
 import tempfile
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, TextIO
 
 DEFAULT_BACKEND = "spanner"
+_LOGGER = logging.getLogger(__name__)
+
+# Component profiles under deploy/profiles that dev_env can install as the xmc-profile release.
+COMPONENT_PROFILES = ("stable-2026a", "stable-2026b")
+DEFAULT_COMPONENT_PROFILE = "stable-2026a"
+# Release statuses a profile.yaml may declare; a profile without a status field is stable.
+PROFILE_STATUS_PREVIEW = "preview"
+PROFILE_STATUS_STABLE = "stable"
 
 
 @dataclass(kw_only=True)
@@ -47,6 +55,10 @@ class DeploymentConfig:
     log_monitor_deployment_enabled: bool = True
     database_backend: str = DEFAULT_BACKEND
     profile_values: str | None = None
+    # None keeps the installed xmc-profile release's profile (DEFAULT_COMPONENT_PROFILE on a fresh install).
+    component_profile: str | None = None
+    # Allows installing or switching to a profile whose profile.yaml declares status: preview.
+    allow_preview_profile: bool = False
 
     @property
     def gke_cluster(self) -> str:
@@ -99,7 +111,7 @@ def ensure_venv(venv_dir: Path | None = None) -> None:
         try:
             _bootstrap_venv(resolved_venv)
         except Exception:
-            logging.exception("Failed to bootstrap virtual environment")
+            _LOGGER.exception("Failed to bootstrap virtual environment")
             return
         venv_python = resolved_venv / "bin" / "python3"
         if not venv_python.exists():
@@ -136,14 +148,16 @@ class HandledError(Exception):
     details optionally carries structured data that run_tool adds to the error JSON.
     """
 
-    def __init__(self, message, instruction, details: Mapping[str, Any] | None = None):
+    def __init__(
+        self, message: str, instruction: str, details: Mapping[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.instruction = instruction
         self.details = details
 
 
-def run_tool(parser: argparse.ArgumentParser, main_fn):
+def run_tool(parser: argparse.ArgumentParser, main_fn: Callable[[argparse.Namespace], Any]) -> None:
     """Standard runner for tools.
 
     - Handles `--help` automatically via argparse.
@@ -357,8 +371,8 @@ def parse_yaml_vars(config_path: Path) -> dict[str, Any]:
         if isinstance(data, dict):
             vars_data = data.get("vars") or {}
             return {k: v for k, v in vars_data.items() if isinstance(v, (str, int, float, bool))}
-    except Exception:  # pylint: disable=broad-except
-        pass
+    except Exception as e:  # pylint: disable=broad-except
+        _LOGGER.debug("PyYAML unavailable or YAML parse fell back for %s: %s", config_path, e)
 
     return _parse_yaml_vars_line_fallback(content)
 
@@ -426,6 +440,7 @@ def load_and_validate_config(
 # Color constants for terminal logging
 BLUE = "\033[0;34m"
 GREEN = "\033[0;32m"
+YELLOW = "\033[0;33m"
 RED = "\033[0;31m"
 NC = "\033[0m"  # No Color
 
@@ -433,6 +448,11 @@ NC = "\033[0m"  # No Color
 def log_info(msg: str, stream: TextIO | None = None) -> None:
     """Logs informational messages in blue text to stream (default: stdout)."""
     print(f"\n{BLUE}[INFO] {msg}{NC}", file=stream)
+
+
+def log_warning(msg: str) -> None:
+    """Logs warning messages in yellow text to stderr."""
+    print(f"\n{YELLOW}[WARN] {msg}{NC}", file=sys.stderr)
 
 
 def log_success(msg: str) -> None:
@@ -683,30 +703,65 @@ def _list_cluster_components(namespace: str) -> list[Mapping[str, Any]]:
     return [item for item in items if isinstance(item, Mapping)]
 
 
-def _retired_disabled_component_name(
+def _retired_owned_component(
     item: Mapping[str, Any], release_name: str, catalog_names: set[str]
-) -> str:
-    """Returns CR name when item is a disabled, deletion-protected CR removed from catalog_names."""
+) -> tuple[str, Mapping[str, Any]]:
+    """Returns (name, spec) when item is a release_name CR removed from catalog_names, else ("", {})."""
     meta: Mapping[str, Any] = raw_m if isinstance(raw_m := item.get("metadata"), Mapping) else {}
     ann: Mapping[str, Any] = raw_a if isinstance(raw_a := meta.get("annotations"), Mapping) else {}
     raw_name = meta.get("name")
     name = raw_name if isinstance(raw_name, str) and _DNS1123_RE.match(raw_name) else ""
     if not name or name in catalog_names or ann.get("meta.helm.sh/release-name") != release_name:
-        return ""
+        return "", {}
     spec: Mapping[str, Any] = raw_s if isinstance(raw_s := item.get("spec"), Mapping) else {}
+    return name, spec
+
+
+def _retired_disabled_component_name(
+    item: Mapping[str, Any], release_name: str, catalog_names: set[str]
+) -> str:
+    """Returns CR name when item is a disabled, deletion-protected CR removed from catalog_names."""
+    name, spec = _retired_owned_component(item, release_name, catalog_names)
     is_retired_disabled = not parse_bool_flag(spec.get("enabled", True)) and parse_bool_flag(
         spec.get("deletionProtection", True)
     )
-    return name if is_retired_disabled else ""
+    return name if name and is_retired_disabled else ""
+
+
+def _enabled_retired_components(
+    items: list[Mapping[str, Any]],
+    stored_values: Mapping[str, Any] | None,
+    catalog_names: set[str],
+    release_name: str = "xmc-profile",
+) -> list[str]:
+    """Returns the sorted components removed from catalog_names that a CR or stored value enables."""
+    names: set[str] = set()
+    for item in items:
+        name, spec = _retired_owned_component(item, release_name, catalog_names)
+        if name and parse_bool_flag(spec.get("enabled", True)):
+            names.add(name)
+    raw_comps = stored_values.get("components") if stored_values else None
+    comps: Mapping[str, Any] = raw_comps if isinstance(raw_comps, Mapping) else {}
+    for name, value in comps.items():
+        if (
+            name not in catalog_names
+            and isinstance(value, Mapping)
+            and parse_bool_flag(value.get("enabled", False))
+        ):
+            names.add(name)
+    return sorted(names)
 
 
 def _unprotect_retired_profile_components(
-    namespace: str, catalog_names: set[str], release_name: str = "xmc-profile"
+    namespace: str,
+    catalog_names: set[str],
+    items: list[Mapping[str, Any]],
+    release_name: str = "xmc-profile",
 ) -> None:
-    """Disables deletionProtection on disabled xmc-profile CRs removed from catalog_names."""
+    """Disables deletionProtection on disabled xmc-profile CRs in items removed from catalog_names."""
     if not catalog_names:
         return
-    for item in _list_cluster_components(namespace):
+    for item in items:
         if name := _retired_disabled_component_name(item, release_name, catalog_names):
             log_info(f"Clearing deletionProtection on retired disabled Component '{name}'...")
             run_command(
@@ -725,12 +780,10 @@ def _unprotect_retired_profile_components(
             )
 
 
-def _load_sanitized_profile_values(
-    namespace: str, catalog_names: set[str], release_name: str = "xmc-profile"
-) -> dict[str, Any] | None:
-    """Returns stored Helm values with retired disabled component keys stripped, or None."""
-    if not catalog_names:
-        return None
+def _load_profile_release_values(
+    namespace: str, release_name: str = "xmc-profile"
+) -> Mapping[str, Any] | None:
+    """Returns the user-supplied Helm values of release_name, or None when absent or unreadable."""
     try:
         res = run_command(
             ["helm", "get", "values", release_name, "-n", namespace, "-o", "json"],
@@ -747,8 +800,15 @@ def _load_sanitized_profile_values(
         data = json.loads(res.stdout)
     except json.JSONDecodeError:
         return None
-    comps = data.get("components") if isinstance(data, Mapping) else None
-    if not isinstance(data, Mapping) or not isinstance(comps, Mapping):
+    return data if isinstance(data, Mapping) else None
+
+
+def _sanitize_profile_values(
+    stored_values: Mapping[str, Any] | None, catalog_names: set[str]
+) -> dict[str, Any] | None:
+    """Returns stored_values with retired disabled component keys stripped, or None if unchanged."""
+    comps = stored_values.get("components") if stored_values else None
+    if not catalog_names or not stored_values or not isinstance(comps, Mapping):
         return None
     kept = {
         k: v
@@ -756,36 +816,214 @@ def _load_sanitized_profile_values(
         if k in catalog_names
         or (isinstance(v, Mapping) and parse_bool_flag(v.get("enabled", False)))
     }
-    return {**data, "components": kept} if len(kept) != len(comps) else None
+    return {**stored_values, "components": kept} if len(kept) != len(comps) else None
 
 
-def _resolve_default_profile_chart() -> Path:
-    """Resolves deploy/profiles/stable-2026a from runfiles first, then workspace symlink target."""
+def _resolve_profile_chart(profile: str) -> Path:
+    """Resolves deploy/profiles/<profile> from runfiles first, then workspace symlink target."""
     for base in (Path(__file__).absolute().parents[2], Path(__file__).resolve().parents[2]):
-        candidate = base / "deploy" / "profiles" / "stable-2026a"
+        candidate = base / "deploy" / "profiles" / profile
         if candidate.is_dir():
             return candidate
-    return Path(__file__).resolve().parents[2] / "deploy" / "profiles" / "stable-2026a"
+    return Path(__file__).resolve().parents[2] / "deploy" / "profiles" / profile
+
+
+def _validate_component_profile_config(config: DeploymentConfig) -> None:
+    """Raises if config selects an unknown component profile or a missing values file."""
+    if config.component_profile is not None and config.component_profile not in COMPONENT_PROFILES:
+        raise ValueError(
+            f"Unknown component profile '{config.component_profile}'; "
+            f"expected one of {', '.join(COMPONENT_PROFILES)}."
+        )
+    if config.profile_values and not Path(config.profile_values).is_file():
+        raise FileNotFoundError(
+            f"Profile values file '{config.profile_values}' does not exist or is not a file."
+        )
+
+
+_PROFILE_CHART_RE = re.compile(r"^xmc-profile-(?P<profile>.+)-(?P<version>\d+\.\d+\.\d+\S*)\Z")
+
+
+def _installed_component_profile(namespace: str, release_name: str = "xmc-profile") -> str | None:
+    """Returns the profile of the installed release_name, read from its chart name, or None if absent.
+
+    Raises:
+        RuntimeError: If the release cannot be listed or its chart names no known profile.
+    """
+    res = run_command(
+        ["helm", "list", "-n", namespace, "-f", f"^{release_name}$", "-o", "json"],
+        check=False,
+        capture_output=True,
+        log_cmd=False,
+        log_on_error=False,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"Failed to list Helm release '{release_name}': {res.stderr}")
+    try:
+        releases = json.loads(res.stdout or "[]")
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Failed to parse 'helm list' output for '{release_name}': {e}") from e
+    charts = [
+        r.get("chart") for r in releases if isinstance(r, Mapping) and r.get("name") == release_name
+    ]
+    if not charts:
+        return None
+    match = _PROFILE_CHART_RE.match(str(charts[0]))
+    if not match or match["profile"] not in COMPONENT_PROFILES:
+        raise RuntimeError(
+            f"Cannot determine the component profile of release '{release_name}' from chart "
+            f"'{charts[0]}'; pass --profile explicitly."
+        )
+    return match["profile"]
+
+
+_PROFILE_STATUS_RE = re.compile(r"^status:[ \t]*(?P<value>[^#\n]*?)[ \t]*(?:#.*)?$", re.MULTILINE)
+
+
+def component_profile_status(profile: str) -> str:
+    """Returns the release status that profile's profile.yaml declares, stable when omitted.
+
+    Raises:
+        OSError: If the profile.yaml of profile cannot be read.
+        ValueError: If the top-level status field is repeated or not preview or stable.
+    """
+    path = _resolve_profile_chart(profile) / "profile.yaml"
+    values = [v.strip("\"'") for v in _PROFILE_STATUS_RE.findall(path.read_text(encoding="utf-8"))]
+    if not values:
+        return PROFILE_STATUS_STABLE
+    if len(values) == 1 and values[0] in (PROFILE_STATUS_PREVIEW, PROFILE_STATUS_STABLE):
+        return values[0]
+    raise ValueError(
+        f"{path}: status must be '{PROFILE_STATUS_PREVIEW}' or '{PROFILE_STATUS_STABLE}' "
+        f"(or omitted for {PROFILE_STATUS_STABLE}), found {values}."
+    )
+
+
+def check_component_profile_status(
+    profile: str, installed: str | None, *, allow_preview: bool
+) -> None:
+    """Rejects installing or switching to a preview profile unless allow_preview is set.
+
+    Keeping an installed preview profile (profile == installed) only logs a warning.
+
+    Args:
+        profile: Component profile about to be deployed as the xmc-profile release.
+        installed: Profile of the installed xmc-profile release, or None on a fresh install.
+        allow_preview: Whether --allow-preview-profile was passed.
+
+    Raises:
+        ValueError: If profile is a preview profile that is not installed and allow_preview is
+            False, or its profile.yaml status is malformed.
+    """
+    if component_profile_status(profile) != PROFILE_STATUS_PREVIEW:
+        return
+    caveat = "it is not released and may change incompatibly before release"
+    if profile == installed:
+        log_warning(
+            f"Keeping the installed preview component profile ({profile}); {caveat}. "
+            "Pass --profile to switch."
+        )
+        return
+    if not allow_preview:
+        action = f"switch from {installed} to" if installed else "install"
+        raise ValueError(
+            f"Refusing to {action} the preview component profile {profile}: {caveat}. "
+            f"Pass --allow-preview-profile with --profile {profile} to proceed."
+        )
+    log_warning(f"Deploying the preview component profile ({profile}); {caveat}.")
+
+
+def add_allow_preview_profile_flag(parser: argparse.ArgumentParser) -> None:
+    """Adds --allow-preview-profile to a parser that already takes --profile."""
+    parser.add_argument(
+        "--allow-preview-profile",
+        action="store_true",
+        help=(
+            "Allow installing or switching to a preview component profile (profile.yaml "
+            "status: preview), which is not released and may change incompatibly."
+        ),
+    )
+
+
+def select_component_profile(config: DeploymentConfig, namespace: str) -> str:
+    """Returns the profile to deploy after checking that its release status allows it.
+
+    The profile is config.component_profile, else the installed profile, else the default
+    profile. Only reads the cluster, so callers can run it before changing anything.
+
+    Raises:
+        ValueError: If the selected profile is unknown, or a preview profile that
+            check_component_profile_status rejects.
+        RuntimeError: If the installed profile cannot be determined.
+    """
+    _validate_component_profile_config(config)
+    explicit = config.component_profile
+    needs_installed = not explicit or component_profile_status(explicit) == PROFILE_STATUS_PREVIEW
+    installed = _installed_component_profile(namespace) if needs_installed else None
+    profile = explicit or installed or DEFAULT_COMPONENT_PROFILE
+    if installed and not explicit:
+        _log_kept_profile(installed)
+    check_component_profile_status(profile, installed, allow_preview=config.allow_preview_profile)
+    return profile
+
+
+def _log_kept_profile(installed: str) -> None:
+    """Logs that the installed profile is kept, at WARN when it is not the default profile.
+
+    A kept preview profile is reported by check_component_profile_status instead, so a run
+    logs a single warning for it.
+    """
+    msg = f"Keeping the installed component profile ({installed}); pass --profile to switch."
+    if installed == DEFAULT_COMPONENT_PROFILE:
+        log_info(msg)
+    elif component_profile_status(installed) != PROFILE_STATUS_PREVIEW:
+        log_warning(f"{msg} It is not the default profile ({DEFAULT_COMPONENT_PROFILE}).")
+
+
+def _prepare_profile_switch(
+    namespace: str, profile: str, catalog_names: set[str]
+) -> dict[str, Any] | None:
+    """Unprotects retired disabled CRs and returns sanitized stored values for the profile upgrade.
+
+    Raises:
+        RuntimeError: Before changing anything, if a component that profile does not ship is enabled.
+    """
+    if not catalog_names:
+        return None
+    items = _list_cluster_components(namespace)
+    stored_values = _load_profile_release_values(namespace)
+    if enabled := _enabled_retired_components(items, stored_values, catalog_names):
+        raise RuntimeError(
+            f"Components {', '.join(enabled)} are enabled but the {profile} profile does not ship "
+            "them; set components.<name>.enabled=false and upgrade first."
+        )
+    _unprotect_retired_profile_components(namespace, catalog_names, items)
+    return _sanitize_profile_values(stored_values, catalog_names)
 
 
 def deploy_component_profile(config: DeploymentConfig) -> None:
-    """Deploys default XMC component profile (stable-2026a).
+    """Deploys an XMC component profile as the xmc-profile release.
+
+    The profile is config.component_profile when set, otherwise the installed profile, and
+    stable-2026a only on a fresh install. Installing or switching to a preview profile needs
+    config.allow_preview_profile. Switching profiles upgrades the same release to the
+    other profile chart: disabled Components the new profile no longer ships are unprotected
+    and their stored values stripped first, so Helm can prune them.
 
     Args:
         config: Loaded DeploymentConfig instance.
 
     Raises:
+        ValueError: If config.component_profile is not one of COMPONENT_PROFILES, or selects
+            a preview profile without config.allow_preview_profile.
         FileNotFoundError: If config.profile_values is specified and missing.
+        RuntimeError: If the installed profile cannot be determined, or a component the
+            profile does not ship is still enabled.
     """
-    if config.profile_values and not Path(config.profile_values).is_file():
-        raise FileNotFoundError(
-            f"Profile values file '{config.profile_values}' does not exist or is not a file."
-        )
     ns = config.namespace or "xmc"
-    chart_dir = _resolve_default_profile_chart()
-    catalog_names = _profile_catalog_names(chart_dir)
-    _unprotect_retired_profile_components(ns, catalog_names)
-    sanitized = _load_sanitized_profile_values(ns, catalog_names)
+    profile = select_component_profile(config, ns)
+    chart_dir = _resolve_profile_chart(profile)
+    sanitized = _prepare_profile_switch(ns, profile, _profile_catalog_names(chart_dir))
     with tempfile.TemporaryDirectory() as tmp_dir:
         mode = "--reset-then-reuse-values"
         extra_files: list[str] = []
@@ -808,6 +1046,6 @@ def deploy_component_profile(config: DeploymentConfig) -> None:
             ns,
             "--wait",
         ]
-        log_info(f"Deploying default component profile (stable-2026a) into namespace '{ns}'...")
+        log_info(f"Deploying component profile ({profile}) into namespace '{ns}'...")
         run_command(cmd)
-    log_success("Default component profile (stable-2026a) deployed.")
+    log_success(f"Component profile ({profile}) deployed.")

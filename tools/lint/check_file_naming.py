@@ -82,7 +82,6 @@ LEGACY_UNPAIRED_ALLOWLIST: frozenset[str] = frozenset(
         "internal/storage/spanner/statusmessage/repository.go",
         "internal/storage/spanner/workunit/createworkunit.go",
         "internal/storage/spanner/xid/repository.go",
-        "internal/task_queue_redis/redisclient/common.go",
         "internal/task_queue_redis/redisclient/publisher.go",
         "internal/task_queue_redis/validator/validator.go",
         "pkg/auth/oauth2/gateway.go",

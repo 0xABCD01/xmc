@@ -54,6 +54,9 @@ type HelmManager interface {
 	IsComponentActive(ref ComponentRef) bool
 	// IsComponentActuated checks if the component is currently active and was actuated at the specified generation.
 	IsComponentActuated(ref ComponentRef, generation int64) bool
+	// ProfileDrifted reports whether the component's profile (its xmc.dev/profile label) differs from the profile its
+	// release was last actuated with; a label change does not bump the generation.
+	ProfileDrifted(ctx context.Context, ref ComponentRef, profile string) bool
 	// NeedsRepair reports whether the component's release, already actuated at the specified generation, was found
 	// missing, failed, or drifted and must be re-applied. A repair re-applies an approved spec, so it is not held for
 	// unready dependencies.
@@ -87,8 +90,13 @@ type K8sHelmManager struct {
 	activeState         map[string]bool
 	actuatedGenerations map[string]int64
 	componentChartPaths map[string]string
-	chartCache          map[string]*chart.Chart
-	upgradeErrs         map[string]error
+	// persistedProfiles caches, per namespace/name component key, the resolved profile stored with the component's
+	// values in the values ConfigMap (see persistedProfileKey). Hydration fills it from the ConfigMap after a restart.
+	persistedProfiles map[string]string
+	// profileCharts are the embedded charts per profile; defaultProfileCharts unless WithProfileCharts replaces them.
+	profileCharts ProfileCharts
+	chartCache    map[string]*chart.Chart
+	upgradeErrs   map[string]error
 	// upgradeSem serializes every Helm release operation: sync and async upgrades and uninstalls.
 	upgradeSem chan struct{}
 	// pendingUpgrades maps component keys to the sequence number of their latest enqueued async upgrade.
@@ -135,6 +143,12 @@ func WithChartPathResolver(resolver ChartPathResolver) HelmManagerOption {
 	return func(m *K8sHelmManager) { m.chartPathResolver = resolver }
 }
 
+// WithProfileCharts replaces the profiles whose embedded charts the manager installs (by default, the profiles
+// embedded in the bridge binary). charts should include DefaultProfile, which serves unknown profile labels.
+func WithProfileCharts(charts ProfileCharts) HelmManagerOption {
+	return func(m *K8sHelmManager) { m.profileCharts = charts }
+}
+
 // WithSyncExecution configures whether Helm upgrades execute synchronously or via background workers.
 func WithSyncExecution(sync bool) HelmManagerOption {
 	return func(m *K8sHelmManager) { m.syncExecution = sync }
@@ -176,6 +190,8 @@ func NewK8sHelmManager(client kubernetes.Interface, namespace, releaseName strin
 		activeState:         make(map[string]bool),
 		actuatedGenerations: make(map[string]int64),
 		componentChartPaths: make(map[string]string),
+		persistedProfiles:   make(map[string]string),
+		profileCharts:       defaultProfileCharts,
 		chartCache:          make(map[string]*chart.Chart),
 		upgradeErrs:         make(map[string]error),
 		pendingUpgrades:     make(map[string]uint64),
@@ -337,7 +353,8 @@ func validateComponentRef(ref ComponentRef) error {
 	return nil
 }
 
-// Ensure1PComponent sets component values in the release ConfigMap and executes an independent Helm upgrade.
+// Ensure1PComponent sets component values in the release ConfigMap and executes an independent Helm upgrade. The
+// resolved profile is stored with the values, so a change of only the profile counts as a values change.
 func (m *K8sHelmManager) Ensure1PComponent(ctx context.Context, ref ComponentRef, opts HelmComponentOptions) error {
 	if m == nil {
 		return nil
@@ -345,14 +362,15 @@ func (m *K8sHelmManager) Ensure1PComponent(ctx context.Context, ref ComponentRef
 	if err := validateComponentRef(ref); err != nil {
 		return err
 	}
+	opts.Profile = m.profileCharts.resolve(ctx, opts.Profile)
 	values := BuildHelmValues(opts)
-	modified, err := m.persistComponentValues(ctx, ref.Namespace, ref.Name, values)
+	modified, err := m.persistComponentValues(ctx, ref.Namespace, ref.Name, withPersistedProfile(values, opts.Profile))
 	if err != nil {
 		return fmt.Errorf("failed to persist Helm values for %q: %w", ref.Name, err)
 	}
 	// TODO: Read the chart override, repair mark, activity and upgrade error under one m.mu critical section so
 	// a concurrent teardown cannot land between these checks and the upgrade (pre-existing check-then-act gap).
-	chartPathChanged := m.recordChartPathOverride(ref, opts.ChartPath)
+	chartPathChanged := m.recordChartSelection(ref, opts.ChartPath, opts.Profile)
 	repair := m.isRepairMarked(ref)
 	if !modified && !chartPathChanged && !repair && m.IsComponentActive(ref) && m.GetUpgradeError(ref) == nil {
 		return nil
@@ -361,23 +379,25 @@ func (m *K8sHelmManager) Ensure1PComponent(ctx context.Context, ref ComponentRef
 		m.recordRepairAttempt(ctx, ref)
 	}
 	warnMissingEnvFallbacks(ctx, ref, opts, values)
-	if err := m.triggerUpgrade(ctx, ref, values); err != nil {
+	if err := m.triggerUpgrade(ctx, ref, opts, values); err != nil {
 		return err
 	}
 	m.mu.Lock()
 	m.retireOtherIncarnationsLocked(ref)
 	m.activeState[componentStateKey(ref)] = opts.Enabled
 	m.mu.Unlock()
-	logging.Info(ctx, "Ensured 1P component Helm values and triggered upgrade", "name", ref.Name, "namespace", ref.Namespace, "release", ComponentReleaseNameForRef(ref), "enabled", opts.Enabled, "repair", repair)
+	logging.Info(ctx, "Ensured 1P component Helm values and triggered upgrade", "name", ref.Name, "namespace", ref.Namespace, "release", ComponentReleaseNameForRef(ref), "enabled", opts.Enabled, "repair", repair, "profile", opts.Profile)
 	return nil
 }
 
-// recordChartPathOverride stores the component's chart path override, clearing it when chartPath is empty, and reports
-// whether the override changed.
-func (m *K8sHelmManager) recordChartPathOverride(ref ComponentRef, chartPath string) bool {
+// recordChartSelection stores, under one lock, the component's chart path override (clearing it when chartPath is
+// empty) and the resolved profile just persisted with its values. It reports whether the chart path override changed;
+// a profile change is already reported as a values change by persistComponentValues.
+func (m *K8sHelmManager) recordChartSelection(ref ComponentRef, chartPath, profile string) bool {
 	key := componentKey(ref.Namespace, ref.Name)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.persistedProfiles[key] = profile
 	changed := m.componentChartPaths[key] != chartPath
 	if chartPath == "" {
 		delete(m.componentChartPaths, key)
@@ -385,6 +405,24 @@ func (m *K8sHelmManager) recordChartPathOverride(ref ComponentRef, chartPath str
 	}
 	m.componentChartPaths[key] = chartPath
 	return changed
+}
+
+// ProfileDrifted reports whether profile, once resolved, differs from the profile stored with the component's values.
+// Labels do not bump metadata.generation, so the reconciler checks it before skipping an already actuated component.
+// A component whose values were stored without a profile (before profiles existed) counts as DefaultProfile. It runs
+// on every reconcile pass, so an unknown label is not logged here; Ensure1PComponent logs it when it actuates.
+func (m *K8sHelmManager) ProfileDrifted(ctx context.Context, ref ComponentRef, profile string) bool {
+	if m == nil || validateComponentRef(ref) != nil {
+		return false
+	}
+	resolved := m.profileCharts.lookup(profile)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	stored, ok := m.persistedProfiles[componentKey(ref.Namespace, ref.Name)]
+	if !ok {
+		stored = DefaultProfile
+	}
+	return stored != resolved
 }
 
 // Delete1PComponent uninstalls the 1P component Helm release and records it as disabled in the ConfigMap.

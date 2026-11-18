@@ -1381,6 +1381,86 @@ image_tag: latest
             "Profile values file '/tmp/nonexistent-profile-values-1429.yaml' does not exist or is not a file."
         )
 
+    @patch("tools.dev_env.deploy_dev_env._check_dns_access")
+    @patch("tools.dev_env.deploy_dev_env._check_gcp_project_alignment")
+    @patch("tools.dev_env.deploy_dev_env.log_error")
+    @patch("tools.dev_env.deploy_dev_env.verify_helm_min_version", return_value="v3.15.0")
+    @patch("tools.dev_env.deploy_dev_env._check_terraform_version")
+    @patch("tools.dev_env.deploy_dev_env._verify_binaries")
+    def test_run_checks_preview_profile_needs_flag(
+        self,
+        _mock_bin: MagicMock,
+        _mock_tf: MagicMock,
+        _mock_helm: MagicMock,
+        mock_log_error: MagicMock,
+        mock_project: MagicMock,
+        _mock_dns: MagicMock,
+    ) -> None:
+        """--profile naming a preview profile exits before any GCP check without the flag."""
+        cases = (
+            # (--profile, --allow-preview-profile, want exit)
+            ("stable-2026b", False, True),
+            ("stable-2026b", True, False),
+            ("stable-2026a", False, False),
+            (None, False, False),
+        )
+        for profile, allow, want_exit in cases:
+            with self.subTest(profile=profile, allow=allow):
+                mock_log_error.reset_mock()
+                mock_project.reset_mock()
+                cfg = replace(
+                    self.valid_config, component_profile=profile, allow_preview_profile=allow
+                )
+                if not want_exit:
+                    deploy_dev_env.run_checks(cfg, self.dns_project, self.dns_zone)
+                    mock_project.assert_called_once()
+                    continue
+                with self.assertRaises(SystemExit):
+                    deploy_dev_env.run_checks(cfg, self.dns_project, self.dns_zone)
+                self.assertIn("--allow-preview-profile", mock_log_error.call_args[0][0])
+                mock_project.assert_not_called()
+
+    @patch("tools.dev_env.deploy_dev_env._print_deployment_summary")
+    @patch("tools.dev_env.deploy_dev_env._build_step_map", return_value={"verify": lambda: None})
+    @patch("tools.dev_env.deploy_dev_env.run_checks")
+    @patch("tools.dev_env.deploy_dev_env.load_and_validate_config")
+    def test_run_deployment_threads_profile_into_config(
+        self,
+        mock_load: MagicMock,
+        mock_checks: MagicMock,
+        _mock_steps: MagicMock,
+        _mock_summary: MagicMock,
+    ) -> None:
+        """--profile and --allow-preview-profile reach the config; both default to unset."""
+        mock_load.return_value = DeploymentConfig(
+            project_id="p",
+            deployment_name="d",
+            region="r",
+            environment="e",
+            image_registry="reg",
+            image_tag="t",
+        )
+        base_argv = [
+            "-c",
+            "cfg.yaml",
+            "--dns-project",
+            "dp",
+            "--dns-zone",
+            "dz",
+            "--only",
+            "verify",
+        ]
+        cases: tuple[tuple[list[str], str | None, bool], ...] = (
+            ([], None, False),
+            (["--profile", "stable-2026b", "--allow-preview-profile"], "stable-2026b", True),
+        )
+        for extra, want, want_allow in cases:
+            with self.subTest(extra=extra):
+                deploy_dev_env.run_deployment(deploy_dev_env.parse_args(base_argv + extra))
+                config = mock_checks.call_args[0][0]
+                self.assertEqual(config.component_profile, want)
+                self.assertEqual(config.allow_preview_profile, want_allow)
+
     def test_build_resume_cmd_quotes_profile_values_and_rejects_removed_components_flags(self):
         parsed = deploy_dev_env.parse_args(
             [
@@ -1392,10 +1472,14 @@ image_tag: latest
                 "dns-zone",
                 "--profile-values",
                 "/tmp/my dir/profile values.yaml",
+                "--profile",
+                "stable-2026b",
+                "--allow-preview-profile",
             ]
         )
         cmd = deploy_dev_env._build_resume_cmd(parsed, "app")
         self.assertIn("--profile-values '/tmp/my dir/profile values.yaml' ", cmd)
+        self.assertIn("--profile stable-2026b --allow-preview-profile ", cmd)
         self.assertTrue(cmd.endswith("--start-from app"))
 
         for flag in ("--enable-components", "--no-enable-components"):

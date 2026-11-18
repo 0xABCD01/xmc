@@ -124,6 +124,8 @@ kill "${PF_PID}"
    - If `helm get values xmc-profile -n xmc` previously recorded `vizier` or `hpo` keys, run the Step 4 `helm upgrade` once with `--reset-values -f profile-values.yaml` (including all active overrides in `profile-values.yaml`) instead of `--reset-then-reuse-values`.
 4. Re-run the Step 4 `helm upgrade --install --reset-then-reuse-values xmc-profile ...` command from the new release checkout (`dev_env.py gke-upgrade --profile-values` unprotects retired disabled CRs and runs this upgrade automatically).
 
+To move a migrated cluster to the preview [`stable-2026b` profile](../../deploy/profiles/stable-2026b/README.md) afterwards, upgrade the same `xmc-profile` release with `./deploy/profiles/stable-2026b` (or `dev_env.py gke-upgrade --profile stable-2026b --allow-preview-profile`); see [switching profiles](../../deploy/profiles/stable-2026b/README.md#switching-between-stable-2026a-and-stable-2026b).
+
 > [!NOTE]
 > `--reset-then-reuse-values` keeps the values supplied to the previous `xmc-profile` release, so deleting an override from `profile-values.yaml` does not revert it on upgrade. To return a value to its chart default, set the default explicitly (for example `components.ingestion-gateway.parameters.topicName: "xmc-metrics"`).
 

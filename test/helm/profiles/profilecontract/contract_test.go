@@ -81,6 +81,15 @@ func writeFile(t *testing.T, s Spec, rel, data string) {
 	fatalOnError(t, os.WriteFile(path, []byte(data), 0o644))
 }
 
+// appendStatus appends a top-level status field with the YAML value status to profile.yaml.
+func appendStatus(t *testing.T, s Spec, status string) {
+	t.Helper()
+	path := filepath.Join(s.ChartRelPath, "profile.yaml")
+	data, err := os.ReadFile(path)
+	fatalOnError(t, err)
+	fatalOnError(t, os.WriteFile(path, append(data, []byte("status: "+status+"\n")...), 0o644))
+}
+
 // checkErrors runs every case of the named contract check against s and joins their errors.
 func checkErrors(t *testing.T, s Spec, check string) error {
 	t.Helper()
@@ -182,6 +191,12 @@ func TestContractChecks_DetectViolations(t *testing.T) {
 		{name: "supportWindow month malformed", wantCheck: "MetadataIsConsistent", wantErr: "want YYYY-MM months", mutate: func(t *testing.T, s *Spec) {
 			replaceInFile(t, *s, "profile.yaml", `start: "2026-10"`, `start: "2026-13"`)
 		}},
+		{name: "status not preview or stable", wantCheck: "MetadataIsConsistent", wantErr: `profile.yaml status = beta`, mutate: func(t *testing.T, s *Spec) {
+			appendStatus(t, *s, "beta")
+		}},
+		{name: "status not a string", wantCheck: "MetadataIsConsistent", wantErr: `profile.yaml status = [preview]`, mutate: func(t *testing.T, s *Spec) {
+			appendStatus(t, *s, "[preview]")
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -191,6 +206,37 @@ func TestContractChecks_DetectViolations(t *testing.T) {
 			err := checkErrors(t, s, tt.wantCheck)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("%s error = %v, want error containing %q", tt.wantCheck, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestMetadataIsConsistent_AcceptsReleaseStatuses checks that profile.yaml may omit status
+// (stable) or declare either valid status, and that ReleaseStatus reports it.
+func TestMetadataIsConsistent_AcceptsReleaseStatuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status string
+		want   string
+	}{
+		{name: "omitted", want: StatusStable},
+		{name: "preview", status: "preview", want: StatusPreview},
+		{name: "stable", status: "stable", want: StatusStable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := copyProfile(t)
+			if tt.status != "" {
+				appendStatus(t, s, tt.status)
+			}
+			if err := checkErrors(t, s, "MetadataIsConsistent"); err != nil {
+				t.Errorf("MetadataIsConsistent error = %v, want nil", err)
+			}
+			if got := ReleaseStatus(t, s); got != tt.want {
+				t.Errorf("ReleaseStatus() = %q, want %q", got, tt.want)
 			}
 		})
 	}

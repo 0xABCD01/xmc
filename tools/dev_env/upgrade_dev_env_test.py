@@ -267,6 +267,7 @@ class TestStepSubprocesses(unittest.TestCase):
             image_tag="latest",
         )
 
+    @mock.patch("tools.dev_env.upgrade_dev_env.select_component_profile")
     @mock.patch("tools.dev_env.upgrade_dev_env.verify_helm_min_version", return_value="v3.15.0")
     @mock.patch("shutil.which", return_value="/usr/bin/tool")
     @mock.patch.object(Path, "is_file", return_value=True)
@@ -274,12 +275,20 @@ class TestStepSubprocesses(unittest.TestCase):
     @mock.patch("tools.dev_env.upgrade_dev_env.run_command")
     @mock.patch("tools.dev_env.upgrade_dev_env.configure_docker_auth")
     def test_step_check(
-        self, mock_docker_auth, mock_run, _mock_access, _mock_file, _mock_which, _mock_helm
+        self,
+        mock_docker_auth,
+        mock_run,
+        _mock_access,
+        _mock_file,
+        _mock_which,
+        _mock_helm,
+        mock_select,
     ):
         mock_run.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="", stderr=""
         )
         upgrade_dev_env.step_check(self.config)
+        mock_select.assert_called_once_with(self.config, "xmc")
         calls = mock_run.call_args_list
         self.assertIn(
             mock.call(
@@ -457,6 +466,57 @@ class TestStepSubprocesses(unittest.TestCase):
         parsed = upgrade_dev_env.parse_args(["--profile-values", "/tmp/pv.yaml"])
         self.assertEqual(parsed.profile_values, "/tmp/pv.yaml")
 
+    @mock.patch("tools.dev_env.upgrade_dev_env.run_pipeline")
+    @mock.patch("tools.dev_env.upgrade_dev_env.load_config")
+    def test_run_upgrade_threads_profile_into_config(
+        self, mock_load: mock.MagicMock, mock_pipeline: mock.MagicMock
+    ) -> None:
+        """--profile and --allow-preview-profile reach the config; both default to unset."""
+        mock_load.return_value = self.config
+        cases: tuple[tuple[list[str], str | None, bool], ...] = (
+            ([], None, False),
+            (["--profile", "stable-2026b", "--allow-preview-profile"], "stable-2026b", True),
+        )
+        for argv, want, want_allow in cases:
+            with self.subTest(argv=argv):
+                upgrade_dev_env.run_upgrade(upgrade_dev_env.parse_args(argv))
+                config = mock_pipeline.call_args[0][1]
+                self.assertEqual(config.component_profile, want)
+                self.assertEqual(config.allow_preview_profile, want_allow)
+
+    @mock.patch("tools.dev_env.upgrade_dev_env.log_error")
+    @mock.patch(
+        "tools.dev_env.upgrade_dev_env.select_component_profile",
+        side_effect=ValueError("Refusing to install the preview component profile stable-2026b"),
+    )
+    @mock.patch("tools.dev_env.upgrade_dev_env.verify_helm_min_version", return_value="v3.15.0")
+    @mock.patch("shutil.which", return_value="/usr/bin/tool")
+    @mock.patch.object(Path, "is_file", return_value=True)
+    @mock.patch("os.access", return_value=True)
+    @mock.patch("tools.dev_env.upgrade_dev_env.run_command")
+    @mock.patch("tools.dev_env.upgrade_dev_env.configure_docker_auth")
+    def test_step_check_rejects_preview_profile_before_changes(
+        self,
+        _mock_docker_auth,
+        mock_run,
+        _mock_access,
+        _mock_file,
+        _mock_which,
+        _mock_helm,
+        _mock_select,
+        mock_log_error,
+    ) -> None:
+        """A rejected preview profile exits in the check step, before migrate/images/app."""
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        with self.assertRaises(SystemExit) as cm:
+            upgrade_dev_env.step_check(replace(self.config, component_profile="stable-2026b"))
+        self.assertEqual(cm.exception.code, 1)
+        mock_log_error.assert_called_once_with(
+            "Refusing to install the preview component profile stable-2026b"
+        )
+
     @mock.patch("tools.dev_env.upgrade_dev_env.log_error")
     @mock.patch(
         "tools.dev_env.upgrade_dev_env.verify_helm_min_version",
@@ -513,6 +573,9 @@ class TestStepSubprocesses(unittest.TestCase):
                 "--run-migrations",
                 "--profile-values",
                 "/tmp/my dir/profile values.yaml",
+                "--profile",
+                "stable-2026b",
+                "--allow-preview-profile",
                 "--start-from",
                 "app",
             ]
@@ -529,6 +592,7 @@ class TestStepSubprocesses(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("--run-migrations", out)
         self.assertIn("--profile-values '/tmp/my dir/profile values.yaml'", out)
+        self.assertIn("--profile stable-2026b --allow-preview-profile", out)
         self.assertIn("--start-from app", out)
 
 

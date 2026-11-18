@@ -23,6 +23,7 @@ go_library(
         "helm_builder.go",
         "helm_leader_runnable.go",
         "helm_manager.go",
+        "profile_charts.go",
         "release_executor.go",
         "release_health.go",
         "release_repair.go",
@@ -33,6 +34,7 @@ go_library(
     deps = [
         "//api/protos/components/v1alpha1",
         "//deploy/profiles/stable-2026a:stable2026a",
+        "//deploy/profiles/stable-2026b:stable2026b",
         "//internal/logging",
         "//pkg/components/naming",
         "@io_k8s_api//core/v1:core",
@@ -63,6 +65,7 @@ go_test(
         "helm_builder_test.go",
         "helm_leader_runnable_test.go",
         "helm_manager_test.go",
+        "profile_charts_test.go",
         "release_executor_test.go",
         "release_health_test.go",
         "release_repair_test.go",
