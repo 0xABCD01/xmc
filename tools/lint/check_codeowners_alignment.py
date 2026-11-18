@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,109 +27,174 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.common.tool_utils import HandledError, run_tool  # noqa: E402
+from tools.components.check_profile_lock import (  # noqa: E402
+    LOCKED_PROFILES_REL_PATH,
+    parse_locked_profiles_yaml,
+)
 
-PROTECTED_PATHS: tuple[str, ...] = (
+STATIC_PROTECTED_PATHS: tuple[str, ...] = (
     "/CODEOWNERS",
     "/OWNERS",
+    "/.githooks/pre-commit",
+    "/.github/workflows/lint.yml",
     "/deploy/profiles/locked_profiles.yaml",
     "/deploy/profiles/BUILD.bazel",
-    "/deploy/profiles/stable-2026a/",
     "/tools/components/check_profile_lock.py",
     "/tools/components/BUILD.bazel",
     "/tools/lint/check_codeowners_alignment.py",
     "/tools/lint/BUILD.bazel",
-    "/test/helm/profiles/stable2026a/",
+    "/test/helm/profiles/profilecontract/",
 )
 
 
-def _resolve_default_repo_root() -> Path:
-    """Resolve repository root in-tree or under Bazel runfiles."""
-    if (_REPO_ROOT / "OWNERS").is_file() and (_REPO_ROOT / "CODEOWNERS").is_file():
-        return _REPO_ROOT
-    for env_key in ("BUILD_WORKSPACE_DIRECTORY", "TEST_SRCDIR"):
-        raw = os.environ.get(env_key, "").strip()
-        if not raw:
+def _default_repo_root() -> Path:
+    """Resolves the repo root from Bazel runfiles first, then the symlink target."""
+    for base in (
+        Path(__file__).absolute().parents[2],
+        Path(__file__).resolve().parents[2],
+    ):
+        if (base / "OWNERS").is_file() and (base / "CODEOWNERS").is_file():
+            return base
+    return Path(__file__).resolve().parents[2]
+
+
+def _read_active_lines(path: Path) -> list[str]:
+    """Reads non-empty, comment-stripped lines with normalized whitespace."""
+    return [
+        cleaned
+        for raw in path.read_text(encoding="utf-8").splitlines()
+        if (cleaned := " ".join(raw.split("#", 1)[0].split()))
+    ]
+
+
+def _resolve_required_paths(repo_root: Path) -> list[str]:
+    """Builds required CODEOWNERS paths from static surfaces and locked_profiles.yaml."""
+    required = list(STATIC_PROTECTED_PATHS)
+    lock_file = repo_root / LOCKED_PROFILES_REL_PATH
+    if not lock_file.is_file():
+        raise HandledError(
+            f"Missing locked profiles registry: {lock_file}.",
+            f"Ensure {LOCKED_PROFILES_REL_PATH} exists under {repo_root}.",
+            details={"missing_files": [str(lock_file)]},
+        )
+    locked_profiles = parse_locked_profiles_yaml(lock_file.read_text(encoding="utf-8"))
+    for name in sorted(locked_profiles):
+        required.append(f"/deploy/profiles/{name}/")
+        test_pkg_name = name.replace("-", "")
+        test_dir = repo_root / "test/helm/profiles" / test_pkg_name
+        profile_dir = repo_root / "deploy/profiles" / name
+        if test_dir.is_dir() or not profile_dir.is_dir():
+            required.append(f"/test/helm/profiles/{test_pkg_name}/")
+    return required
+
+
+def _parse_codeowners_rules(lines: list[str]) -> dict[str, str]:
+    """Parses normalized CODEOWNERS lines into a path -> owners string mapping."""
+    rules: dict[str, str] = {}
+    for line in lines:
+        parts = line.split(" ", 1)
+        if len(parts) != 2 or not parts[1].strip():
+            raise HandledError(
+                f"Malformed CODEOWNERS rule: '{line}'.",
+                "Format each rule as '/<path> @owner1 @owner2 ...'.",
+            )
+        pattern, owners_str = parts[0], parts[1].strip()
+        if pattern in ("*", "/*", "/"):
+            raise HandledError(
+                f"Repo-wide wildcard rule '{pattern}' is not allowed in CODEOWNERS.",
+                "Scope CODEOWNERS rules to explicit governance and locked-profile paths so auto-assign-reviewers.yml can filter ABSENCE.md.",
+            )
+        if pattern in rules:
+            raise HandledError(
+                f"Duplicate path pattern '{pattern}' in CODEOWNERS.",
+                f"Define '{pattern}' at most once in CODEOWNERS.",
+            )
+        rules[pattern] = owners_str
+    return rules
+
+
+def _verify_owned_paths_exist(
+    repo_root: Path,
+    rules: dict[str, str],
+    required_set: set[str],
+) -> None:
+    """Verifies owned paths exist on disk when running against a full checkout or custom rules."""
+    enforce_all = (repo_root / ".git").exists()
+    missing_paths: list[str] = []
+    for pattern in rules:
+        if not enforce_all and pattern in required_set:
             continue
-        candidate = Path(raw)
-        if (candidate / "OWNERS").is_file():
-            return candidate
-        workspace = os.environ.get("TEST_WORKSPACE", "_main").strip() or "_main"
-        ws_candidate = candidate / workspace
-        if (ws_candidate / "OWNERS").is_file():
-            return ws_candidate
-    if (Path.cwd() / "OWNERS").is_file():
-        return Path.cwd()
-    return _REPO_ROOT
-
-
-def _strip_comments(text: str) -> list[str]:
-    """Return non-empty lines with trailing `#` comments removed."""
-    cleaned: list[str] = []
-    for raw_line in text.splitlines():
-        entry = raw_line.split("#", 1)[0].strip()
-        if entry:
-            cleaned.append(entry)
-    return cleaned
+        rel = pattern.lstrip("/")
+        if not rel or not (repo_root / rel).exists():
+            missing_paths.append(pattern)
+    if missing_paths:
+        raise HandledError(
+            f"CODEOWNERS references nonexistent repository path(s): {', '.join(missing_paths)}.",
+            "Remove or update stale paths in CODEOWNERS so every owned path exists on disk.",
+            details={"missing_owned_paths": missing_paths},
+        )
 
 
 def check_codeowners_alignment(args: argparse.Namespace) -> dict[str, Any]:
-    """Validate that CODEOWNERS rules match the scoped paths and OWNERS reviewer pool."""
-    repo_root = Path(args.repo_root).resolve() if args.repo_root else _resolve_default_repo_root()
+    """Validate that CODEOWNERS rules cover required paths and match the OWNERS pool."""
+    repo_root = Path(args.repo_root).absolute()
     owners_file = repo_root / "OWNERS"
     codeowners_file = repo_root / "CODEOWNERS"
 
-    if not owners_file.is_file() or not codeowners_file.is_file():
+    missing = [str(p) for p in (owners_file, codeowners_file) if not p.is_file()]
+    if missing:
         raise HandledError(
-            f"Missing OWNERS ({owners_file.is_file()}) or CODEOWNERS ({codeowners_file.is_file()}) under {repo_root}.",
+            f"Missing required ownership file(s): {', '.join(missing)}.",
             "Ensure both OWNERS and CODEOWNERS exist at the repository root.",
-            details={
-                "repo_root": str(repo_root),
-                "owners_exists": owners_file.is_file(),
-                "codeowners_exists": codeowners_file.is_file(),
-            },
+            details={"missing_files": missing},
         )
 
-    owners = _strip_comments(owners_file.read_text(encoding="utf-8"))
+    owners = _read_active_lines(owners_file)
     if not owners:
         raise HandledError(
             "OWNERS contains no active reviewer handles.",
             "Populate OWNERS with at least one GitHub username.",
         )
-    codeowner_lines = _strip_comments(codeowners_file.read_text(encoding="utf-8"))
     expected_owners = " ".join(f"@{u.lstrip('@')}" for u in owners)
-    expected_lines = [f"{path} {expected_owners}" for path in PROTECTED_PATHS]
+    required_paths = _resolve_required_paths(repo_root)
+    rules = _parse_codeowners_rules(_read_active_lines(codeowners_file))
 
-    if codeowner_lines != expected_lines:
+    missing_rules = [p for p in required_paths if p not in rules]
+    mismatched_rules = {p: actual for p, actual in rules.items() if actual != expected_owners}
+    if missing_rules or mismatched_rules:
         raise HandledError(
-            "CODEOWNERS does not match the scoped rules for the OWNERS reviewer pool.",
-            "Update CODEOWNERS so every protected path lists the exact @<user> pool from OWNERS.",
+            "CODEOWNERS does not align with required governance paths or the OWNERS reviewer pool.",
+            "Update CODEOWNERS so every required path is present and lists the exact @<user> pool from OWNERS.",
             details={
-                "expected": expected_lines,
-                "actual": codeowner_lines,
+                "expected_owners": expected_owners,
+                "missing_required_paths": missing_rules,
+                "mismatched_owners": mismatched_rules,
             },
         )
 
+    _verify_owned_paths_exist(repo_root, rules, set(required_paths))
     return {
         "owners_count": len(owners),
-        "protected_paths_count": len(expected_lines),
+        "required_paths_count": len(required_paths),
+        "configured_rules_count": len(rules),
     }
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser."""
+    """Builds the CLI argument parser."""
     parser = argparse.ArgumentParser(
-        description="Verify that CODEOWNERS aligns with the OWNERS reviewer pool.",
+        description=(__doc__ or "").splitlines()[0],
     )
     parser.add_argument(
         "--repo-root",
-        default="",
+        default=str(_default_repo_root()),
         help="Repository root directory containing OWNERS and CODEOWNERS.",
     )
     return parser
 
 
 def main() -> None:
-    """Run the CODEOWNERS alignment linter CLI."""
+    """CLI entrypoint."""
     run_tool(build_parser(), check_codeowners_alignment)
 
 

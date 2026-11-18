@@ -95,9 +95,13 @@ py_library(
     data = [
         "//:CODEOWNERS",
         "//:OWNERS",
+        "//deploy/profiles:locked_profiles",
     ],
     imports = ["../.."],
-    deps = ["//tools/common:tool_utils"],
+    deps = [
+        "//tools/common:tool_utils",
+        "//tools/components:check_profile_lock_lib",
+    ],
 )
 
 py_test(
@@ -106,6 +110,7 @@ py_test(
     data = [
         "//:CODEOWNERS",
         "//:OWNERS",
+        "//deploy/profiles:locked_profiles",
     ],
     imports = ["../.."],
     deps = [

@@ -122,7 +122,7 @@ Any modification touching protected files immediately aborts auto-reapproval:
 - `OWNERS` / `CODEOWNERS`
 - `api/testdata/protos_baseline.binpb` (refreshing the protobuf breaking-change baseline accepts breaking API changes)
 - `api/buf.yaml` and `api/BUILD.bazel` (the breaking-change rules and test definition, which could otherwise weaken or redirect the check)
-- `deploy/profiles/locked_profiles.yaml`, `deploy/profiles/BUILD.bazel`, `deploy/profiles/stable-2026a/**`, `tools/components/check_profile_lock.py`, `tools/components/BUILD.bazel`, `tools/lint/check_codeowners_alignment.py`, `tools/lint/BUILD.bazel`, and `test/helm/profiles/stable2026a/{profile_digest_test.go,BUILD.bazel}` (GA-locked component profile registries, locked profile charts, and lock/digest/alignment gates)
+- `deploy/profiles/locked_profiles.yaml`, `deploy/profiles/BUILD.bazel`, `deploy/profiles/stable-2026a/**`, `tools/components/check_profile_lock.py`, `tools/components/BUILD.bazel`, `tools/lint/check_codeowners_alignment.py`, `tools/lint/BUILD.bazel`, `test/helm/profiles/profilecontract/**`, and `test/helm/profiles/stable2026a/{profile_digest_test.go,BUILD.bazel}` (GA-locked component profile registries, locked profile charts, and lock/digest/alignment gates)
 - Target base branch configuration files
 
 Scoping uses 3-dot diff against the PR's target base branch (`git diff --name-only origin/${baseRef}...${currentSha}`) to prevent false positives when intermediate commits are merged into `origin/main`. If Git commands fail, the check defaults to `hasProtectedFileChanges = true` (fail-safe).

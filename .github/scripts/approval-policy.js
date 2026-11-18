@@ -55,6 +55,7 @@ const PROTECTED_FILE_PATTERNS = [
   /^tools\/components\/BUILD(\.bazel)?$/i,
   /^tools\/lint\/check_codeowners_alignment\.py$/i,
   /^tools\/lint\/BUILD(\.bazel)?$/i,
+  /^test\/helm\/profiles\/profilecontract\//i,
   /^test\/helm\/profiles\/stable2026a\/(profile_digest_test\.go|BUILD(\.bazel)?)$/i
 ];
 

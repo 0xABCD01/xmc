@@ -75,6 +75,7 @@ test('isProtectedFile protects CODEOWNERS and GA-locked component profile govern
   assert.strictEqual(isProtectedFile('tools/components/BUILD.bazel'), true);
   assert.strictEqual(isProtectedFile('tools/lint/check_codeowners_alignment.py'), true);
   assert.strictEqual(isProtectedFile('tools/lint/BUILD.bazel'), true);
+  assert.strictEqual(isProtectedFile('test/helm/profiles/profilecontract/render.go'), true);
   assert.strictEqual(isProtectedFile('test/helm/profiles/stable2026a/profile_digest_test.go'), true);
   assert.strictEqual(isProtectedFile('test/helm/profiles/stable2026a/BUILD.bazel'), true);
   assert.strictEqual(isProtectedFile('deploy/profiles/experimental-2026b/Chart.yaml'), false);

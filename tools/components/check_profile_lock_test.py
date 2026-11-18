@@ -114,6 +114,13 @@ class ParseLockedProfilesTest(unittest.TestCase):
 
     def test_checked_in_locked_profiles_yaml_contract(self) -> None:
         repo_root = check_profile_lock._REPO_ROOT
+        for candidate in (
+            Path(__file__).absolute().parents[2],
+            Path(__file__).resolve().parents[2],
+        ):
+            if (candidate / check_profile_lock.LOCKED_PROFILES_REL_PATH).is_file():
+                repo_root = candidate
+                break
         lock_path = repo_root / check_profile_lock.LOCKED_PROFILES_REL_PATH
         self.assertTrue(lock_path.is_file(), f"Missing {lock_path}")
         profiles = check_profile_lock.parse_locked_profiles_yaml(

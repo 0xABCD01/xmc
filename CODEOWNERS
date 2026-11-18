@@ -15,6 +15,8 @@
 # Code owners for GA-locked component profiles and lock enforcement (mirrors the OWNERS reviewer pool).
 /CODEOWNERS @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
 /OWNERS @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/.githooks/pre-commit @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/.github/workflows/lint.yml @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
 /deploy/profiles/locked_profiles.yaml @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
 /deploy/profiles/BUILD.bazel @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
 /deploy/profiles/stable-2026a/ @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
@@ -22,4 +24,5 @@
 /tools/components/BUILD.bazel @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
 /tools/lint/check_codeowners_alignment.py @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
 /tools/lint/BUILD.bazel @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
+/test/helm/profiles/profilecontract/ @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
 /test/helm/profiles/stable2026a/ @AntonTyb @andrzejfudro @janzak-dev @pachopepe @VLukiantsev
