@@ -477,6 +477,19 @@ class PythonGateTest(unittest.TestCase):
         ):
             self.assertEqual(gates.main(["--mode", "fix"]), 1)
 
+    def test_python_gates_include_doc_link_and_agent_doc_triggers(self):
+        by_script = {g.script: g for g in gates.PYTHON_GATES}
+        self.assertIn("tools/lint/check_doc_links.py", by_script)
+        self.assertEqual(
+            by_script["tools/lint/check_doc_links.py"].staged_am_pattern,
+            r"\.md$|^tools/lint/check_(doc_links|agent_doc_paths)\.py$",
+        )
+        self.assertTrue(by_script["tools/lint/check_doc_links.py"].check_deletes)
+        self.assertEqual(
+            by_script["tools/lint/check_agent_doc_paths.py"].staged_am_pattern,
+            r"^\.agents/.*\.md$|(^|/)AGENTS\.md$|^tools/lint/check_agent_doc_paths\.py$",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
