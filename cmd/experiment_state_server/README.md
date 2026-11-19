@@ -122,6 +122,10 @@ the RPC: ESS logs it and increments the `xmc_ess_study_reconcile_enqueue_failure
 and the study stays created without a reconcile tick until a future sweeper recovers it (see
 [Create Experiment](../../docs/flows/experiment_lifecycle.md#1-create-experiment)).
 
+A study's work units are its trials, which only the study controller creates. `CreateWorkUnit` on a
+`STUDY` experiment returns `FAILED_PRECONDITION` without writing anything
+([`internal/workunit/createworkunit.go`](../../internal/workunit/createworkunit.go)).
+
 ---
 
 ## Testing & Verification
