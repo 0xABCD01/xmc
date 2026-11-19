@@ -150,11 +150,11 @@ func LoadConfig(optionalFlags ...*Flags) (*Config, error) {
 
 	jwtSecretFile := getEnvOrDefault("", "", "JWT_SECRET_FILE")
 	if jwtSecret == "" && jwtSecretFile != "" {
-		if content, err := os.ReadFile(jwtSecretFile); err == nil {
-			jwtSecret = strings.TrimSpace(string(content))
-		} else {
+		content, err := os.ReadFile(jwtSecretFile)
+		if err != nil {
 			return nil, fmt.Errorf("failed to read JWT_SECRET_FILE %q: %w", jwtSecretFile, err)
 		}
+		jwtSecret = strings.TrimSpace(string(content))
 	}
 
 	cfg := &Config{

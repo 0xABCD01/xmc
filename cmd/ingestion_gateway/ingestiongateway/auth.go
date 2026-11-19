@@ -84,31 +84,9 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		}
 
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
-
-		// 1. Check pre-shared static tokens
-		tokenSha := sha256.Sum256([]byte(tokenStr))
-		for _, t := range am.TokenList {
-			tSha := sha256.Sum256([]byte(t))
-			if subtle.ConstantTimeCompare(tokenSha[:], tSha[:]) == 1 {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-
-		// 2. Check JWT
-		if am.Config.JWTSecret != "" {
-			if _, err := oauth2.ParseSessionToken(tokenStr, []byte(am.Config.JWTSecret), oauth2.CLIAudience, oauth2.FrontendAudience); err == nil {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-
-		// 3. Check OIDC
-		if am.Config.EnableGoogleOIDC && am.Config.OIDCAudience != "" {
-			if payload, err := idtoken.Validate(r.Context(), tokenStr, am.Config.OIDCAudience); err == nil && payload != nil {
-				next.ServeHTTP(w, r)
-				return
-			}
+		if am.validateToken(r.Context(), tokenStr) {
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		if am.Metrics != nil {
@@ -116,4 +94,30 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		}
 		http.Error(w, "Unauthorized: invalid token", http.StatusUnauthorized)
 	})
+}
+
+func (am *AuthMiddleware) validateToken(ctx context.Context, tokenStr string) bool {
+	// 1. Check pre-shared static tokens
+	tokenSha := sha256.Sum256([]byte(tokenStr))
+	for _, t := range am.TokenList {
+		tSha := sha256.Sum256([]byte(t))
+		if subtle.ConstantTimeCompare(tokenSha[:], tSha[:]) == 1 {
+			return true
+		}
+	}
+
+	// 2. Check JWT
+	if am.Config.JWTSecret != "" {
+		if _, err := oauth2.ParseSessionToken(tokenStr, []byte(am.Config.JWTSecret), oauth2.CLIAudience, oauth2.FrontendAudience); err == nil {
+			return true
+		}
+	}
+
+	// 3. Check OIDC
+	if am.Config.EnableGoogleOIDC && am.Config.OIDCAudience != "" {
+		if payload, err := idtoken.Validate(ctx, tokenStr, am.Config.OIDCAudience); err == nil && payload != nil {
+			return true
+		}
+	}
+	return false
 }
