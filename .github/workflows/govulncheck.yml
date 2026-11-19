@@ -57,6 +57,11 @@ jobs:
           restore-keys: |
             bazel-repo-${{ runner.os }}-
 
+      - name: 'Configure Bazel Repository Cache'
+        run: |
+          mkdir -p "${HOME}/.cache/bazel-repo"
+          echo "common --repository_cache=${HOME}/.cache/bazel-repo" >> ~/.bazelrc
+
       - name: 'Extract Bazel Go SDK version'
         id: 'go-version'
         run: |
@@ -77,19 +82,26 @@ jobs:
       - name: 'Install govulncheck'
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
-      - name: 'Build production Go binaries via Bazel'
+      - name: 'Build and scan production Go binaries'
         run: |
-          TARGETS=$(bazel query 'kind("go_binary", //cmd/...) except attr(name, "_dev$", kind("go_binary", //cmd/...))')
-          echo "Building targets:"
-          echo "${TARGETS}"
-          # shellcheck disable=SC2086
-          bazel build ${TARGETS}
+          TARGETS_OUT=$(bazel query 'kind("go_binary", //cmd/...) except attr(name, "_dev$", kind("go_binary", //cmd/...))')
+          if [ -z "${TARGETS_OUT}" ]; then
+            echo "ERROR: No production Go binary targets found under //cmd/..." >&2
+            exit 1
+          fi
+          mapfile -t TARGETS <<< "${TARGETS_OUT}"
+          printf 'Building targets:\n%s\n' "${TARGETS[@]}"
+          bazel build "${TARGETS[@]}"
 
-      - name: 'Run govulncheck on built binaries'
-        run: |
-          TARGETS=$(bazel query 'kind("go_binary", //cmd/...) except attr(name, "_dev$", kind("go_binary", //cmd/...))')
-          for target in ${TARGETS}; do
-            bin=$(bazel cquery --output=files "${target}" 2>/dev/null | head -n 1)
+          failed=0
+          for target in "${TARGETS[@]}"; do
+            bin=$(bazel cquery --output=files "${target}")
+            if [ -z "${bin}" ] || [ ! -f "${bin}" ]; then
+              echo "ERROR: Missing built binary for ${target}: '${bin}'" >&2
+              failed=1
+              continue
+            fi
             echo "=== Scanning ${target} (${bin}) ==="
-            govulncheck -mode=binary "${bin}"
+            govulncheck -mode=binary "${bin}" || failed=1
           done
+          exit "${failed}"
