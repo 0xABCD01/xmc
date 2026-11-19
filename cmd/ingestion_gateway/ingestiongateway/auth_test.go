@@ -11,7 +11,7 @@ import (
 
 func TestAuthMiddleware(t *testing.T) {
 	jwtSecret := "my-secret-that-must-be-long-enough-for-hs256"
-	token, _ := oauth2.GenerateSessionToken("user@example.com", []byte(jwtSecret), time.Hour, oauth2.FrontendAudience)
+	token, _ := oauth2.GenerateSessionToken("user@example.com", "Test User", "", time.Hour, []byte(jwtSecret))
 
 	tests := []struct {
 		name       string
