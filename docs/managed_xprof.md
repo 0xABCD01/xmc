@@ -120,7 +120,7 @@ python3 tools/dev_env/dev_env.py gke-upgrade \
 >      --location="${REGION}" \
 >      --enable-managed-mldiagnostics
 >    ```
-> 2. Apply the API and IAM changes by redeploying the `apis`, `primary`, and `compute` groups with `./cluster-toolkit/gcluster deploy`, or manually enable `hypercomputecluster.googleapis.com` and grant `roles/hypercomputecluster.editor` to `<env>-xmc-wl-sa@${PROJECT_ID}.iam.gserviceaccount.com`.
+> 2. Apply the API and IAM changes by redeploying the `apis`, `primary`, and `compute` groups with `./cluster-toolkit/gcluster deploy`, or manually enable `hypercomputecluster.googleapis.com` and grant `roles/hypercomputecluster.editor` to `<deployment_name>-xmc-wl-sa@${PROJECT_ID}.iam.gserviceaccount.com`.
 
 > [!TIP]
 > You can also run individual upgrade stages step-by-step using `--only migrate --run-migrations`, `--only images`, `--only app`, `--only restart`, and `--only verify`, or resume from a specific stage with `--start-from <step>`.
@@ -430,7 +430,7 @@ python3 -m tools.nightly_tests.examples_verification.managed_xprof_artifact_job_
 * **`Managed Xprof` Artifact Card Title Is Not Clickable (No External Link Icon)**:
   * Cause: The `xprof_url` is populated from `WorkUnitExecution.metadata.mlrun_url`, which the Reconciler writes while the Work Unit is active (`RUNNING`) and after the `ManagedXprof` artifact has been attached.
   * Fix:
-    1. Check that `enable_managed_mldiagnostics: true` is configured, and if the cluster was upgraded via `gke-upgrade` rather than freshly provisioned, apply the §1.3 existing-cluster steps so `hypercomputecluster.googleapis.com` is enabled and `<env>-xmc-wl-sa` has `roles/hypercomputecluster.editor`.
+    1. Check that `enable_managed_mldiagnostics: true` is configured, and if the cluster was upgraded via `gke-upgrade` rather than freshly provisioned, apply the §1.3 existing-cluster steps so `hypercomputecluster.googleapis.com` is enabled and `<deployment_name>-xmc-wl-sa` has `roles/hypercomputecluster.editor`.
     2. Inspect the Reconciler logs for `MLRun` creation status:
        ```bash
        kubectl logs deployment/reconciler-deployment -n xmc | grep -i mlrun
