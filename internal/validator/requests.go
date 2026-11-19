@@ -42,6 +42,8 @@ const (
 	maxURLs = 1000
 	// maxURLLen defines the maximum character length of a URL string.
 	maxURLLen = 51200 // 50 KiB
+	// maxBatchCreateWorkUnits is the maximum number of requests in a BatchCreateWorkUnitsRequest.
+	maxBatchCreateWorkUnits = 500
 )
 
 var (
@@ -374,6 +376,36 @@ func ValidateCreateWorkUnitRequest(in *essmsgpb.CreateWorkUnitRequest) error {
 		return fmt.Errorf("work_unit.work_unit_type cannot be empty: %w", grpcerr.ErrInvalidArgument)
 	}
 	return validateJobSetExecutable(wu.GetExecutable())
+}
+
+// ValidateBatchCreateWorkUnitsRequest validates the parent and the size of the given
+// BatchCreateWorkUnitsRequest, requires each of its requests and their work units to be set, and
+// returns the XID of its parent.
+func ValidateBatchCreateWorkUnitsRequest(in *essmsgpb.BatchCreateWorkUnitsRequest) (int64, error) {
+	xid, err := ValidateExperimentName(in.GetParent())
+	if err != nil {
+		return 0, fmt.Errorf("parent must be in the format experiments/{xid}: %v: %w", err, grpcerr.ErrInvalidArgument)
+	}
+	if n := len(in.GetRequests()); n == 0 || n > maxBatchCreateWorkUnits {
+		return 0, fmt.Errorf("requests must contain between 1 and %d requests, got %d: %w", maxBatchCreateWorkUnits, n, grpcerr.ErrInvalidArgument)
+	}
+	for i, req := range in.GetRequests() {
+		if err := validateBatchedCreateWorkUnitRequest(req); err != nil {
+			return 0, fmt.Errorf("requests[%d]: %w", i, err)
+		}
+	}
+	return xid, nil
+}
+
+// validateBatchedCreateWorkUnitRequest rejects a nil request of a batch or a nil work_unit.
+func validateBatchedCreateWorkUnitRequest(req *essmsgpb.CreateWorkUnitRequest) error {
+	if req == nil {
+		return fmt.Errorf("request cannot be nil: %w", grpcerr.ErrInvalidArgument)
+	}
+	if req.GetWorkUnit() == nil {
+		return fmt.Errorf("work_unit cannot be nil: %w", grpcerr.ErrInvalidArgument)
+	}
+	return nil
 }
 
 func validateWorkUnitMetadata(wu *essmsgpb.WorkUnit) error {
