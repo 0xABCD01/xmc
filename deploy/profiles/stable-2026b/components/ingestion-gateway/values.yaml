@@ -17,7 +17,7 @@ parameters:
   minPartitions: 128
   minReplicas: 1
   requireAuth: false
-  gatewayEnabled: true
+  gatewayEnabled: false
   gatewayName: "xmc-gateway"
   gatewayHostname: ""
   gatewayLbProxyCidrs: "130.211.0.0/22,35.191.0.0/16"
