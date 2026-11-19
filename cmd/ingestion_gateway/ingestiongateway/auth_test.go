@@ -31,7 +31,7 @@ func TestAuthMiddleware(t *testing.T) {
 			cfg := &Config{RequireAuth: tc.reqAuth, JWTSecret: tc.secret}
 			am := NewAuthMiddleware(cfg, nil)
 
-			req := httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			if tc.authHeader != "" {
 				req.Header.Set("Authorization", tc.authHeader)
 			}
