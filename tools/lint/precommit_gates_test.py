@@ -93,14 +93,23 @@ class GitDiscoveryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             (root / "main.tf").write_text("", encoding="utf-8")
+            (root / "Dockerfile").write_text("", encoding="utf-8")
             (root / "sub").mkdir()
             (root / "sub" / "vars.tf").write_text("", encoding="utf-8")
+            (root / "sub" / "notes.txt").write_text("", encoding="utf-8")
             (root / "node_modules").mkdir()
             (root / "node_modules" / "skip.tf").write_text("", encoding="utf-8")
+            (root / "node_modules" / "Dockerfile").write_text("", encoding="utf-8")
             found = gates.walk_repo_files([".", ".", "missing"], suffixes=[".tf"], base_dir=root)
+            found_exact = gates.walk_repo_files(["."], exact_names=["Dockerfile"], base_dir=root)
+            found_combined = gates.walk_repo_files(
+                ["."], suffixes=[".tf"], exact_names=["Dockerfile"], base_dir=root
+            )
             found_all = gates.walk_repo_files([".", "missing"], base_dir=root)
         self.assertEqual(found, ["main.tf", "sub/vars.tf"])
-        self.assertEqual(found_all, ["main.tf", "sub/vars.tf"])
+        self.assertEqual(found_exact, ["Dockerfile"])
+        self.assertEqual(found_combined, ["Dockerfile", "main.tf", "sub/vars.tf"])
+        self.assertEqual(found_all, ["Dockerfile", "main.tf", "sub/notes.txt", "sub/vars.tf"])
 
         with (
             mock.patch.object(gates, "walk_repo_files", return_value=["deploy/a.tf"]),

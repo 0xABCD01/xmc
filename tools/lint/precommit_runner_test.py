@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
 
@@ -93,7 +95,7 @@ class LanguageChecksTest(unittest.TestCase):
         with (
             mock.patch.object(runner.shutil, "which", return_value=None),
             mock.patch.object(gates, "resolve_go_tool", return_value=None),
-            mock.patch.object(runner.os.path, "isdir", return_value=True),
+            mock.patch.object(runner.Path, "is_dir", return_value=True),
             mock.patch.object(gates, "exec_cmd") as exec_mock,
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
@@ -256,6 +258,26 @@ class LanguageChecksTest(unittest.TestCase):
 
 
 class OrchestrationAndMainTest(unittest.TestCase):
+    @contextlib.contextmanager
+    def _patch_linter_phase_subchecks(self, *, fail_ctx: bool = False) -> Iterator[None]:
+        def _maybe_fail(ctx: gates.RunContext) -> None:
+            if fail_ctx:
+                ctx.fail("lint")
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(runner, "check_bazel", side_effect=_maybe_fail))
+            for target, attr in (
+                (runner, "check_go"),
+                (runner, "check_ui"),
+                (runner, "check_license"),
+                (runner, "check_python"),
+                (runner, "check_mypy"),
+                (deploy_checks, "check_deploy"),
+            ):
+                stack.enter_context(mock.patch.object(target, attr))
+            stack.enter_context(mock.patch.object(gates, "run_python_gate"))
+            yield
+
     def test_linter_phase_blocks_on_snapshot_fail_no_autostage_and_restage_fail(self):
         with (
             mock.patch.dict(os.environ, {}, clear=False),
@@ -267,14 +289,7 @@ class OrchestrationAndMainTest(unittest.TestCase):
 
         with (
             mock.patch.dict(os.environ, {"XMC_PRECOMMIT_NO_AUTOSTAGE": "1"}, clear=False),
-            mock.patch.object(runner, "check_bazel"),
-            mock.patch.object(runner, "check_go"),
-            mock.patch.object(gates, "run_python_gate"),
-            mock.patch.object(runner, "check_ui"),
-            mock.patch.object(runner, "check_license"),
-            mock.patch.object(runner, "check_python"),
-            mock.patch.object(runner, "check_mypy"),
-            mock.patch.object(deploy_checks, "check_deploy"),
+            self._patch_linter_phase_subchecks(),
             mock.patch.object(
                 gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
             ),
@@ -285,14 +300,7 @@ class OrchestrationAndMainTest(unittest.TestCase):
 
         with (
             mock.patch.dict(os.environ, {}, clear=False),
-            mock.patch.object(runner, "check_bazel"),
-            mock.patch.object(runner, "check_go"),
-            mock.patch.object(gates, "run_python_gate"),
-            mock.patch.object(runner, "check_ui"),
-            mock.patch.object(runner, "check_license"),
-            mock.patch.object(runner, "check_python"),
-            mock.patch.object(runner, "check_mypy"),
-            mock.patch.object(deploy_checks, "check_deploy"),
+            self._patch_linter_phase_subchecks(),
             mock.patch.object(runner, "_autostage", side_effect=[True, False]) as auto_mock,
             mock.patch("sys.stdout", new_callable=io.StringIO) as buf,
         ):
@@ -300,6 +308,44 @@ class OrchestrationAndMainTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(auto_mock.call_count, 2)
         self.assertIn("unstaged files", buf.getvalue())
+
+    def test_linter_phase_run_modes_and_git_diff_error(self):
+        with (
+            mock.patch.dict(os.environ, {"XMC_PRECOMMIT_NO_AUTOSTAGE": "0"}, clear=False),
+            self._patch_linter_phase_subchecks(),
+            mock.patch.object(runner, "_autostage", return_value=True) as auto_mock,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertTrue(runner._run_linter_phase("fix"))
+        self.assertEqual([c.args[0] for c in auto_mock.call_args_list], ["snapshot", "restage"])
+
+        with (
+            self._patch_linter_phase_subchecks(),
+            mock.patch.object(runner, "_autostage") as check_auto_mock,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertTrue(runner._run_linter_phase("check"))
+        check_auto_mock.assert_not_called()
+
+        with (
+            self._patch_linter_phase_subchecks(fail_ctx=True),
+            mock.patch.object(runner, "_autostage") as fail_auto_mock,
+            mock.patch("sys.stdout", new_callable=io.StringIO) as fail_buf,
+        ):
+            self.assertFalse(runner._run_linter_phase("check"))
+        fail_auto_mock.assert_not_called()
+        self.assertIn("Linter checks failed!", fail_buf.getvalue())
+
+        with (
+            mock.patch.dict(os.environ, {"XMC_PRECOMMIT_NO_AUTOSTAGE": "1"}, clear=False),
+            self._patch_linter_phase_subchecks(),
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 2, "", "")
+            ),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as err_buf,
+        ):
+            self.assertFalse(runner._run_linter_phase("fix"))
+        self.assertIn("git diff failed.", err_buf.getvalue())
 
     def test_test_phase_missing_bazel_docs_skip_and_lockfile(self):
         ctx_no_bazel_env = mock.patch.object(runner.shutil, "which", return_value=None)
