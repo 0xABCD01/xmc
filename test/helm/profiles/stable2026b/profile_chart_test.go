@@ -162,7 +162,4 @@ func TestStable2026b_RejectsInvalidValues(t *testing.T) {
 	}
 }
 
-
-
 // chartIdentity is the part of a Chart.yaml that identifies the chart a release installs.
-

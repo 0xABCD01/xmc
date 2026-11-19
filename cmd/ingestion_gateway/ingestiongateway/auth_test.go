@@ -30,19 +30,19 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{RequireAuth: tc.reqAuth, JWTSecret: tc.secret}
 			am := NewAuthMiddleware(cfg, nil)
-			
+
 			req := httptest.NewRequest("GET", "/", nil)
 			if tc.authHeader != "" {
 				req.Header.Set("Authorization", tc.authHeader)
 			}
-			
+
 			rr := httptest.NewRecorder()
 			handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
-			
+
 			handler.ServeHTTP(rr, req)
-			
+
 			if status := rr.Code; status != tc.wantCode {
 				t.Errorf("handler returned wrong status code: got %v want %v", status, tc.wantCode)
 			}
