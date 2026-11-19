@@ -16,15 +16,12 @@ package ingestiongateway
 
 import (
 	"cmp"
-	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"xmanager_cloud/internal/logging"
 )
 
 // Config holds the runtime configuration for the Ingestion Gateway.
@@ -51,8 +48,6 @@ type Config struct {
 	AuthToken             string
 	AuthTokenFile         string
 	JWTSecret             string
-	EnableGoogleOIDC      bool
-	OIDCAudience          string
 }
 
 // Flags holds the CLI flag value bindings for FlagSet registration.
@@ -79,8 +74,6 @@ type Flags struct {
 	AuthToken             string
 	AuthTokenFile         string
 	JWTSecret             string
-	EnableGoogleOIDC      bool
-	OIDCAudience          string
 }
 
 // RegisterFlags registers the ingestion gateway CLI flags on the given FlagSet and returns a Flags struct binding.
@@ -116,8 +109,6 @@ func RegisterFlags(fs *flag.FlagSet) *Flags {
 	fs.StringVar(&f.AuthToken, "auth_token", "", "Pre-shared bearer token for authentication.")
 	fs.StringVar(&f.AuthTokenFile, "auth_token_file", "", "File containing pre-shared bearer token for authentication.")
 	fs.StringVar(&f.JWTSecret, "jwt_secret", "", "Secret for JWT authentication.")
-	fs.BoolVar(&f.EnableGoogleOIDC, "enable_google_oidc", false, "Enable Google OIDC token validation.")
-	fs.StringVar(&f.OIDCAudience, "oidc_audience", "", "Expected audience for OIDC tokens.")
 	return f
 }
 
@@ -180,8 +171,6 @@ func LoadConfig(optionalFlags ...*Flags) (*Config, error) {
 		AuthToken:             authToken,
 		AuthTokenFile:         authTokenFile,
 		JWTSecret:             jwtSecret,
-		EnableGoogleOIDC:      f.EnableGoogleOIDC,
-		OIDCAudience:          f.OIDCAudience,
 	}
 
 	// SASL is a Kafka wire-protocol concept. Skip the secret file reads in Pub/Sub mode so that a

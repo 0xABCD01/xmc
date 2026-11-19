@@ -16,6 +16,7 @@ parameters:
   topicName: "xmc-metrics"
   minPartitions: 128
   minReplicas: 1
+  requireAuth: true
 minReplicas: 2
 maxReplicas: 10
 serviceAccountName: "default"

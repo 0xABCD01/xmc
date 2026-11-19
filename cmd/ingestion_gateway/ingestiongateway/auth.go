@@ -24,8 +24,6 @@ import (
 
 	"xmanager_cloud/internal/logging"
 	"xmanager_cloud/pkg/auth/oauth2"
-
-	"google.golang.org/api/idtoken"
 )
 
 // AuthMiddleware enforces Bearer token authentication.
@@ -69,7 +67,7 @@ func parseCommaNewlineSeparated(s string) []string {
 
 func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !am.Config.RequireAuth && len(am.TokenList) == 0 && am.Config.JWTSecret == "" && !am.Config.EnableGoogleOIDC {
+		if !am.Config.RequireAuth && len(am.TokenList) == 0 && am.Config.JWTSecret == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -113,11 +111,5 @@ func (am *AuthMiddleware) validateToken(ctx context.Context, tokenStr string) bo
 		}
 	}
 
-	// 3. Check OIDC
-	if am.Config.EnableGoogleOIDC && am.Config.OIDCAudience != "" {
-		if payload, err := idtoken.Validate(ctx, tokenStr, am.Config.OIDCAudience); err == nil && payload != nil {
-			return true
-		}
-	}
 	return false
 }

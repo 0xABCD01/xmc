@@ -115,12 +115,10 @@ spec:
           secretName: {{ $tlsSecretName | quote }}
       {{- end }}
       {{- if $requireAuth }}
-      - name: gcp-secrets
-        csi:
-          driver: secrets-store.csi.k8s.io
-          readOnly: true
-          volumeAttributes:
-            secretProviderClass: "xmc-secrets"
+      - name: auth-secrets
+        secret:
+          secretName: {{ $jwtSecretName | quote }}
+          optional: true
       {{- end }}
       {{- end }}
       containers:
@@ -149,8 +147,8 @@ spec:
           readOnly: true
         {{- end }}
         {{- if $requireAuth }}
-        - name: gcp-secrets
-          mountPath: /etc/gcp-secrets
+        - name: auth-secrets
+          mountPath: /etc/auth-secrets
           readOnly: true
         {{- end }}
         {{- end }}
@@ -162,7 +160,7 @@ spec:
         - name: INGESTION_REQUIRE_AUTH
           value: "true"
         - name: JWT_SECRET_FILE
-          value: "/etc/gcp-secrets/jwt-secret"
+          value: "/etc/auth-secrets/jwt-secret"
         {{- end }}
         args:
         - "-port={{ $port }}"
