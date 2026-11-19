@@ -151,11 +151,12 @@ func TestBatchCreateWorkUnits_CreatesTrialsInOneTransaction(t *testing.T) {
 
 func TestBatchCreateWorkUnits_Rejections(t *testing.T) {
 	tests := []struct {
-		name     string
-		storage  func() *batchStorage
-		req      *msgpb.BatchCreateWorkUnitsRequest
-		opts     []testServerOpt
-		wantCode codes.Code
+		name       string
+		storage    func() *batchStorage
+		req        *msgpb.BatchCreateWorkUnitsRequest
+		opts       []testServerOpt
+		wantCode   codes.Code
+		wantErrSub string
 	}{
 		{name: "unauthenticated", opts: []testServerOpt{withAuthorizer(&mockAuthenticator{err: grpcerr.ErrUnauthenticated})}, wantCode: codes.Unauthenticated},
 		{name: "invalid parent", req: batchRequest(1, func(r *msgpb.BatchCreateWorkUnitsRequest) { r.Parent = "experiments/x" }), wantCode: codes.InvalidArgument},
@@ -203,6 +204,7 @@ func TestBatchCreateWorkUnits_Rejections(t *testing.T) {
 			st.ComponentRepository = &storage.MockComponentRepository{GetActiveComponentErr: errors.New("catalog down")}
 			return st
 		}, wantCode: codes.Internal},
+		{name: "unknown execution environment", opts: []testServerOpt{withConfig(&config.Config{DefaultExecutionEnvironment: "unknown"})}, wantCode: codes.Internal, wantErrSub: "requests[0]"},
 		{name: "storage failure", storage: func() *batchStorage {
 			st := newBatchStorage("test@example.com")
 			st.InsertWorkUnitErr = errors.New("insert failed")
@@ -226,6 +228,9 @@ func TestBatchCreateWorkUnits_Rejections(t *testing.T) {
 
 			if status.Code(err) != tt.wantCode || resp != nil {
 				t.Fatalf("BatchCreateWorkUnits() = (%v, %v), want code %v", resp, err, tt.wantCode)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrSub) {
+				t.Errorf("BatchCreateWorkUnits() = %v, want it to contain %q", err, tt.wantErrSub)
 			}
 			if st.InsertedWorkUnit != nil || len(actuator.EnqueuedTasks) != 0 {
 				t.Errorf("rejected request inserted %v and enqueued %d tasks, want none", st.InsertedWorkUnit, len(actuator.EnqueuedTasks))

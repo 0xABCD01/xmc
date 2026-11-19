@@ -486,7 +486,9 @@ message BatchCreateWorkUnitsRequest {
     }
   ];
 
-  // The work units to create: between 1 and 500. The server assigns the IDs.
+  // The work units to create: between 1 and 500. The `parent` of each request
+  // must be empty or equal to the outer `parent`, and `work_unit_id` must be
+  // unset because the server assigns the IDs.
   repeated CreateWorkUnitRequest requests = 2
       [(google.api.field_behavior) = REQUIRED];
 }

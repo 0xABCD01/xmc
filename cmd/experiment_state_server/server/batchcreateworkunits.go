@@ -50,14 +50,17 @@ func (h *WorkUnitHandler) BatchCreateWorkUnits(ctx context.Context, req *msgpb.B
 		return nil, err
 	}
 
-	// 5. Validate the shape of the request.
+	// 5. Validate the request.
 	if _, err := validator.ValidateBatchCreateWorkUnitsRequest(req); err != nil {
 		logging.Warn(ctx, "BatchCreateWorkUnits validation failed", "error", err)
 		return nil, fmt.Errorf("BatchCreateWorkUnits validation failed: %w", err)
 	}
 
-	// 6. Copy each work unit with its default values and initial execution.
-	wus := newStudyTrials(xid, req.GetRequests())
+	// 6. Assemble each work unit.
+	wus, err := h.assembleStudyTrials(ctx, xid, req.GetRequests())
+	if err != nil {
+		return nil, err
+	}
 
 	// 7. Persist all work units in one transaction.
 	created, err := workunit.BatchCreateWorkUnits(ctx, h.storage, xid, email, wus)
@@ -110,16 +113,18 @@ func (h *WorkUnitHandler) fetchBatchCreateParent(ctx context.Context, xid int64)
 	return exp, nil
 }
 
-// newStudyTrials returns copies of the requested work units with default values and an initial
-// execution, for creation in experiment xid, which names them.
-func newStudyTrials(xid int64, reqs []*msgpb.CreateWorkUnitRequest) []*msgpb.WorkUnit {
+// assembleStudyTrials returns copies of the requested work units assembled for creation in
+// experiment xid.
+func (h *WorkUnitHandler) assembleStudyTrials(ctx context.Context, xid int64, reqs []*msgpb.CreateWorkUnitRequest) ([]*msgpb.WorkUnit, error) {
 	wus := make([]*msgpb.WorkUnit, len(reqs))
 	for i, req := range reqs {
-		wu := validator.FillWorkUnitNullValues(proto.Clone(req.GetWorkUnit()).(*msgpb.WorkUnit))
-		wu.CurrentWorkUnitExecution = newWorkUnitExecution(xid, 0)
+		wu, err := h.assembleNewWorkUnit(ctx, xid, 0, proto.Clone(req.GetWorkUnit()).(*msgpb.WorkUnit))
+		if err != nil {
+			return nil, fmt.Errorf("requests[%d]: %w", i, err)
+		}
 		wus[i] = wu
 	}
-	return wus
+	return wus, nil
 }
 
 // batchCreateError reports err to the client: an authorization failure without the configuration
