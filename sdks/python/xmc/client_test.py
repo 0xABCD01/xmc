@@ -57,7 +57,7 @@ class TestClient(unittest.TestCase):
         os.environ["XMC_API_KEY"] = "  test-token  \n"
         client = Client()
         self.assertEqual(client._headers.get("Authorization"), "Bearer test-token")
-        
+
         # Test empty/whitespace-only key
         os.environ["XMC_API_KEY"] = "   \n"
         client_empty = Client()
