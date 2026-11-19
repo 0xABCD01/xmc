@@ -271,6 +271,11 @@ jobs:
         run: npm run lint
         working-directory: 'cmd/ui'
 
+      - name: 'Run TypeScript Typecheck'
+        if: steps.changes.outputs.ui == 'true'
+        run: npm run typecheck
+        working-directory: 'cmd/ui'
+
       - name: 'Run ESLint on Non-UI JS Scripts'
         if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.nonui_js == 'true'
         run: |

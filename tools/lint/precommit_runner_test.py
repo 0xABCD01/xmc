@@ -151,17 +151,48 @@ class LanguageChecksTest(unittest.TestCase):
 
     def test_check_ui_chunks_and_license(self):
         ctx = gates.RunContext(mode="fix")
-        many_ui = [f"cmd/ui/src/f{i}.ts" for i in range(201)]
         with (
-            mock.patch.object(gates, "collect_target_files", return_value=many_ui),
-            mock.patch.object(gates, "resolve_ui_binary", side_effect=["/p/prettier", "/p/eslint"]),
+            mock.patch.object(
+                gates,
+                "git_staged_paths",
+                return_value=["cmd/ui/app.ts", "cmd/ui/index.html", "cmd/ui/s.scss"],
+            ),
+            mock.patch.object(gates, "staged_paths_match", side_effect=[False, True]),
+            mock.patch.object(
+                gates, "resolve_ui_binary", side_effect=["/p/prettier", "/p/eslint", "/p/tsc"]
+            ),
             mock.patch.object(gates, "run_mode_command") as run_mode,
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+            ) as exec_mock,
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
             runner.check_ui(ctx)
+        self.assertFalse(ctx.failed)
         self.assertEqual(run_mode.call_count, 2)
         self.assertEqual(run_mode.call_args_list[0].kwargs["chunk_size"], 200)
-        self.assertEqual(run_mode.call_args_list[0].kwargs["files"], many_ui)
+        self.assertEqual(
+            run_mode.call_args_list[0].kwargs["files"],
+            ["cmd/ui/app.ts", "cmd/ui/index.html", "cmd/ui/s.scss"],
+        )
+        self.assertEqual(run_mode.call_args_list[1].args[1], ["/p/eslint"])
+        self.assertEqual(run_mode.call_args_list[1].kwargs["cwd"], gates.REPO_ROOT / "cmd/ui")
+        self.assertEqual(run_mode.call_args_list[1].kwargs["fix_args"], ["--fix"])
+        self.assertEqual(run_mode.call_args_list[1].kwargs["files"], ["app.ts"])
+        exec_mock.assert_called_once_with(
+            ["npm", "run", "--silent", "typecheck"], cwd=gates.REPO_ROOT / "cmd/ui"
+        )
+
+        ctx_cfg = gates.RunContext(mode="fix")
+        with (
+            mock.patch.object(gates, "git_staged_paths", return_value=["cmd/ui/eslint.config.js"]),
+            mock.patch.object(gates, "staged_paths_match", side_effect=[True, False]),
+            mock.patch.object(gates, "resolve_ui_binary", return_value="/p/eslint"),
+            mock.patch.object(gates, "run_mode_command") as run_mode_cfg,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_ui(ctx_cfg)
+        self.assertEqual(run_mode_cfg.call_args.kwargs["files"], ["."])
 
         ctx_check = gates.RunContext(mode="check")
         with (
