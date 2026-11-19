@@ -42,7 +42,14 @@ describe('guestGuard', () => {
   const state = setup();
 
   it('should redirect to /experiments if user is logged in', (done) => {
-    state.authServiceSpy.getUser.and.returnValue(of({ email: 'user@example.com' } as UserResponse));
+    const mockUser: UserResponse = {
+      email: 'user@example.com',
+      name: 'Test User',
+      pictureUrl: 'pic.jpg',
+      sessionExpiresAt: 12345,
+      allowedDomains: ['example.com'],
+    };
+    state.authServiceSpy.getUser.and.returnValue(of(mockUser));
     const mockUrlTree = {} as UrlTree;
     state.routerSpy.parseUrl.and.returnValue(mockUrlTree);
 
