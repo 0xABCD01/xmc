@@ -152,11 +152,16 @@ export default tseslint.config(
     ],
     rules: {
       'unused-imports/no-unused-imports': 'off',
-      '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unused-vars': 'off',
       '@angular-eslint/prefer-standalone': 'off',
       'max-lines-per-function': 'off',
       complexity: 'off',
+    },
+  },
+  {
+    files: ['**/app/testing/test.ts', '**/app/protos/*.d.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
     },
   },
   {
