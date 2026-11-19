@@ -126,7 +126,7 @@ Any modification touching protected files immediately aborts auto-reapproval:
 - `api/buf.yaml` and `api/BUILD.bazel` (the breaking-change rules and test definition, which could otherwise weaken or redirect the check)
 - Target base branch configuration files
 
-Scoping uses 3-dot diff against the PR's target base branch (`git diff --name-only origin/${baseRef}...${currentSha}`) to prevent false positives when intermediate commits are merged into `origin/main`. If Git commands fail, the check defaults to `hasProtectedFileChanges = true` (fail-safe).
+Scoping uses 3-dot diff against the PR's target base branch (`git diff --name-only --no-renames origin/${baseRef}...${currentSha}`) to prevent false positives when intermediate commits are merged into `origin/main` and to detect renames out of protected paths. If Git commands fail, the check defaults to `hasProtectedFileChanges = true` (fail-safe).
 
 **Clean rebase exception**: A PR touching protected files is still auto-reapproved, for any author, when the push is a pure clean rebase: every approved commit is unchanged in `git range-diff`, with zero changed patch lines and no removed or added commits. Any other change (including grace delta or test-only edits) keeps the lockout. Restoring a dismissed approval on the same commit also stays locked out.
 

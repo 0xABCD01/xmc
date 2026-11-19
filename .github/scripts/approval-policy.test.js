@@ -76,7 +76,7 @@ test('checkProtectedFileChanges detects sensitive modifications and handles git 
 
   // Sensitive files modified
   childProcess.execFileSync = (cmd, args) => {
-    if (cmd === 'git' && args[0] === 'diff') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames') {
       return '.github/scripts/incremental-approval.js\ncmd/server/main.go\n';
     }
     throw new Error(`Unexpected command: ${cmd}`);
@@ -91,7 +91,7 @@ test('checkProtectedFileChanges detects sensitive modifications and handles git 
 
   // Non-sensitive files modified
   childProcess.execFileSync = (cmd, args) => {
-    if (cmd === 'git' && args[0] === 'diff') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames') {
       return 'pkg/main.go\nREADME.md\n';
     }
     throw new Error(`Unexpected command: ${cmd}`);
@@ -143,11 +143,11 @@ test('checkProtectedFileChanges uses 3-dot diff against baseRef and avoids false
   const originalExec = childProcess.execFileSync;
 
   childProcess.execFileSync = (cmd, args) => {
-    if (cmd === 'git' && args[0] === 'diff') {
-      if (args[2] === 'origin/feat/tools-dev-env-helm-deployer...c40cf0f') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames') {
+      if (args[3] === 'origin/feat/tools-dev-env-helm-deployer...c40cf0f') {
         return 'tools/dev_env/local_runner.py\ntools/dev_env/local_runner_test.py\n';
       }
-      if (args[2] === '8fa2009' && args[3] === 'c40cf0f') {
+      if (args[3] === '8fa2009' && args[4] === 'c40cf0f') {
         return '.github/scripts/incremental-approval.js\ntools/dev_env/local_runner.py\n';
       }
     }
@@ -171,7 +171,7 @@ test('checkProtectedFileChanges detects sensitive files in 3-dot diff', () => {
   const originalExec = childProcess.execFileSync;
 
   childProcess.execFileSync = (cmd, args) => {
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'origin/main...c40cf0f') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'origin/main...c40cf0f') {
       return '.github/workflows/incremental-pr-approval.yml\n';
     }
     throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
@@ -189,7 +189,7 @@ test('checkProtectedFileChanges respects 3-argument signature even when execOpti
   const originalExec = childProcess.execFileSync;
 
   childProcess.execFileSync = (cmd, args) => {
-    if (cmd === 'git' && args[0] === 'diff' && args[2] === 'origin/main...c40cf0f') {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'origin/main...c40cf0f') {
       return 'pkg/foo.go\n';
     }
     throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
@@ -198,6 +198,23 @@ test('checkProtectedFileChanges respects 3-argument signature even when execOpti
   try {
     const hasProtected = checkProtectedFileChanges('main', '8fa2009', 'c40cf0f', { encoding: 'utf8' });
     assert.strictEqual(hasProtected, false);
+  } finally {
+    childProcess.execFileSync = originalExec;
+  }
+});
+
+test('checkProtectedFileChanges detects moved protected file when --no-renames reports both paths', () => {
+  const originalExec = childProcess.execFileSync;
+
+  childProcess.execFileSync = (cmd, args) => {
+    if (cmd === 'git' && args[0] === 'diff' && args[1] === '--name-only' && args[2] === '--no-renames' && args[3] === 'origin/main...c40cf0f') {
+      return '.github/workflows/lint.yml\ndocs/lint.yml.bak\n';
+    }
+    throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+  };
+
+  try {
+    assert.strictEqual(checkProtectedFileChanges('main', 'c40cf0f', 'c40cf0f'), true);
   } finally {
     childProcess.execFileSync = originalExec;
   }
