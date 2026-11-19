@@ -23,7 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -106,7 +106,7 @@ class RunContext:
 def exec_cmd(
     cmd: Sequence[str],
     *,
-    cwd: str | Path | None = None,
+    cwd: str | Path | None = REPO_ROOT,
     env: dict[str, str] | None = None,
     capture: bool = False,
     quiet_out: bool = False,
@@ -164,12 +164,14 @@ def walk_repo_files(
     roots: Sequence[str],
     *,
     suffixes: Sequence[str] = (),
+    exact_names: Sequence[str] = (),
     excluded_dirs: frozenset[str] = COMMON_EXCLUDES,
     base_dir: Path = REPO_ROOT,
 ) -> list[str]:
     """Walks `roots` relative to `base_dir` and returns sorted unique matching paths."""
     matched: set[str] = set()
     suffix_tuple = tuple(suffixes)
+    exact_set = frozenset(exact_names)
     for root in roots:
         root_path = base_dir if root == "." else base_dir / root
         if not root_path.exists():
@@ -179,7 +181,9 @@ def walk_repo_files(
             matched.update(
                 Path(dirpath, name).relative_to(base_dir).as_posix()
                 for name in filenames
-                if not suffix_tuple or name.endswith(suffix_tuple)
+                if (not suffix_tuple and not exact_set)
+                or name.endswith(suffix_tuple)
+                or name in exact_set
             )
     return sorted(matched)
 
@@ -228,9 +232,57 @@ def should_run_scope(
     return staged_paths_match("AMD", fix_pattern)
 
 
+def chunked(items: Sequence[str], size: int = 500) -> Iterator[Sequence[str]]:
+    """Yields slices of `items` up to `size` entries to stay within `ARG_MAX` limits."""
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def resolve_binary(name: str, extra_dirs: Sequence[Path] = ()) -> str | None:
+    """Resolves executable `name` from `PATH` or fallback `extra_dirs`."""
+    found = shutil.which(name)
+    if found or not extra_dirs:
+        return found
+    return shutil.which(name, path=os.pathsep.join(str(d) for d in extra_dirs))
+
+
+def resolve_go_bin_dir() -> Path:
+    """Resolves `GOBIN`, first `GOPATH/bin` entry, or `~/go/bin`."""
+    if gobin := os.environ.get("GOBIN"):
+        return Path(gobin)
+    gopath = os.environ.get("GOPATH")
+    if not gopath and shutil.which("go"):
+        res = exec_cmd(["go", "env", "GOPATH"], capture=True, quiet_err=True)
+        gopath = res.stdout.strip() if res.returncode == 0 else ""
+    return Path(gopath.split(os.pathsep)[0]) / "bin" if gopath else Path.home() / "go/bin"
+
+
+def resolve_go_tool(ctx: RunContext, name: str, skip_msg: str, hint: str = "") -> str | None:
+    """Resolves a Go-installed tool binary or emits `skip_msg` via `ctx.warn_missing`."""
+    if binary := resolve_binary(name, (resolve_go_bin_dir(), Path.home() / "go/bin")):
+        return binary
+    ctx.warn_missing(skip_msg, hint)
+    return None
+
+
+def resolve_ui_binary(ctx: RunContext, name: str) -> str | None:
+    """Resolves `name` inside `cmd/ui/node_modules/.bin`, or warns via `ctx`."""
+    bin_dir = REPO_ROOT / "cmd/ui/node_modules/.bin"
+    if found := shutil.which(name, path=str(bin_dir)):
+        return found
+    ctx.warn_missing(
+        f"Local {name} not found at {bin_dir / name}.",
+        "Install: cd cmd/ui && npm ci --legacy-peer-deps",
+    )
+    return None
+
+
 def docker_prefix(image: str, mount: str, *, entrypoint: str | None = None) -> list[str]:
     """Builds a `docker run --rm` command prefix mounting `REPO_ROOT` at `mount`."""
-    cmd = ["docker", "run", "--rm", "-v", f"{REPO_ROOT}:{mount}", "-w", mount]
+    cmd = ["docker", "run", "--rm"]
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"])
+    cmd.extend(["-v", f"{REPO_ROOT}:{mount}", "-w", mount])
     if entrypoint is not None:
         cmd.extend(["--entrypoint", entrypoint])
     return [*cmd, image]
@@ -243,10 +295,11 @@ def resolve_local_or_docker(
     docker_image: str,
     mount: str,
     missing_label: str,
+    extra_dirs: Sequence[Path] = (),
     entrypoint: str | None = None,
 ) -> tuple[list[str], bool] | None:
     """Returns `(cmd_prefix, is_docker)` for `tool`, falling back to `docker_image` or None."""
-    if local := shutil.which(tool):
+    if local := resolve_binary(tool, extra_dirs):
         return [local], False
     if shutil.which("docker"):
         return docker_prefix(docker_image, mount, entrypoint=entrypoint), True
@@ -262,13 +315,16 @@ def run_mode_command(
     fix_args: Sequence[str],
     failure_msg: str,
     ignore_fix_error: bool = False,
-    cwd: str | Path | None = None,
+    cwd: str | Path | None = REPO_ROOT,
+    files: Sequence[str] | None = None,
+    chunk_size: int = 500,
 ) -> None:
-    """Runs `cmd_base` with `check_args` or `fix_args` and records failures."""
+    """Runs `cmd_base` with `check_args` or `fix_args`, batching `files` when given."""
     args = check_args if ctx.mode == "check" else fix_args
-    res = exec_cmd([*cmd_base, *args], cwd=cwd)
-    if res.returncode != 0 and (ctx.mode == "check" or not ignore_fix_error):
-        ctx.fail(failure_msg)
+    for batch in ((),) if files is None else chunked(files, chunk_size):
+        res = exec_cmd([*cmd_base, *args, *batch], cwd=cwd)
+        if res.returncode != 0 and (ctx.mode == "check" or not ignore_fix_error):
+            ctx.fail(failure_msg)
 
 
 def _update_baseline(ctx: RunContext, gate: PythonGate) -> None:

@@ -93,14 +93,23 @@ class GitDiscoveryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             (root / "main.tf").write_text("", encoding="utf-8")
+            (root / "Dockerfile").write_text("", encoding="utf-8")
             (root / "sub").mkdir()
             (root / "sub" / "vars.tf").write_text("", encoding="utf-8")
+            (root / "sub" / "notes.txt").write_text("", encoding="utf-8")
             (root / "node_modules").mkdir()
             (root / "node_modules" / "skip.tf").write_text("", encoding="utf-8")
+            (root / "node_modules" / "Dockerfile").write_text("", encoding="utf-8")
             found = gates.walk_repo_files([".", ".", "missing"], suffixes=[".tf"], base_dir=root)
+            found_exact = gates.walk_repo_files(["."], exact_names=["Dockerfile"], base_dir=root)
+            found_combined = gates.walk_repo_files(
+                ["."], suffixes=[".tf"], exact_names=["Dockerfile"], base_dir=root
+            )
             found_all = gates.walk_repo_files([".", "missing"], base_dir=root)
         self.assertEqual(found, ["main.tf", "sub/vars.tf"])
-        self.assertEqual(found_all, ["main.tf", "sub/vars.tf"])
+        self.assertEqual(found_exact, ["Dockerfile"])
+        self.assertEqual(found_combined, ["Dockerfile", "main.tf", "sub/vars.tf"])
+        self.assertEqual(found_all, ["Dockerfile", "main.tf", "sub/notes.txt", "sub/vars.tf"])
 
         with (
             mock.patch.object(gates, "walk_repo_files", return_value=["deploy/a.tf"]),
@@ -192,6 +201,48 @@ class ToolResolutionTest(unittest.TestCase):
             )
         self.assertTrue(ctx.failed)
 
+    def test_resolve_binary_chunked_go_bin_and_ui_binary(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = Path(tmpdir) / "mytool"
+            tool.write_text("#!/bin/sh\n", encoding="utf-8")
+            tool.chmod(0o755)
+            subdir = Path(tmpdir) / "adir"
+            subdir.mkdir()
+            subdir.chmod(0o755)
+            with mock.patch.dict(os.environ, {"PATH": ""}, clear=False):
+                self.assertEqual(gates.resolve_binary("mytool", [Path(tmpdir)]), str(tool))
+                self.assertIsNone(gates.resolve_binary("adir", [Path(tmpdir)]))
+                self.assertIsNone(gates.resolve_binary("missing", [Path(tmpdir)]))
+
+        self.assertEqual([list(c) for c in gates.chunked(["a", "b", "c"], 2)], [["a", "b"], ["c"]])
+        self.assertEqual([list(c) for c in gates.chunked([], 2)], [])
+
+        with mock.patch.dict(os.environ, {"GOBIN": "/custom/gobin"}, clear=True):
+            self.assertEqual(gates.resolve_go_bin_dir(), Path("/custom/gobin"))
+        with mock.patch.dict(os.environ, {"GOPATH": f"/gp1{os.pathsep}/gp2"}, clear=True):
+            self.assertEqual(gates.resolve_go_bin_dir(), Path("/gp1/bin"))
+        ok = subprocess.CompletedProcess([], 0, stdout=f"/gp_env{os.pathsep}/other\n", stderr="")
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(gates.shutil, "which", return_value="/usr/bin/go"),
+            mock.patch.object(gates, "exec_cmd", return_value=ok),
+        ):
+            self.assertEqual(gates.resolve_go_bin_dir(), Path("/gp_env/bin"))
+        ctx = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "resolve_binary", return_value=None),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertIsNone(gates.resolve_go_tool(ctx, "actionlint", "actionlint not found."))
+        self.assertTrue(ctx.failed)
+        ctx_ui = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates.shutil, "which", return_value=None),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.assertIsNone(gates.resolve_ui_binary(ctx_ui, "eslint"))
+        self.assertTrue(ctx_ui.failed)
+
     def test_run_mode_command_respects_ignore_fix_error(self):
         ctx_fix_ok = gates.RunContext(mode="fix")
         ctx_fix = gates.RunContext(mode="fix")
@@ -211,7 +262,7 @@ class ToolResolutionTest(unittest.TestCase):
 
         with mock.patch.object(
             gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
-        ) as fail_exec:
+        ) as mode_exec:
             gates.run_mode_command(
                 ctx_fix,
                 ["tf"],
@@ -220,6 +271,7 @@ class ToolResolutionTest(unittest.TestCase):
                 failure_msg="bad",
                 ignore_fix_error=True,
             )
+            self.assertEqual(mode_exec.call_args.args[0], ["tf", "fmt"])
             self.assertFalse(ctx_fix.failed)
             with mock.patch("sys.stdout", new_callable=io.StringIO):
                 gates.run_mode_command(
@@ -231,7 +283,24 @@ class ToolResolutionTest(unittest.TestCase):
                     ignore_fix_error=True,
                 )
             self.assertTrue(ctx_check.failed)
-            self.assertEqual(fail_exec.call_args.args[0], ["tf", "fmt", "-check"])
+            self.assertEqual(mode_exec.call_args.args[0], ["tf", "fmt", "-check"])
+
+        ctx_batch = gates.RunContext(mode="check")
+        with mock.patch.object(
+            gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+        ) as batch_exec:
+            gates.run_mode_command(
+                ctx_batch,
+                ["lint"],
+                check_args=["-c"],
+                fix_args=["-w"],
+                failure_msg="bad",
+                files=["a", "b", "c"],
+                chunk_size=2,
+            )
+        self.assertEqual(batch_exec.call_count, 2)
+        self.assertEqual(batch_exec.call_args_list[0].args[0], ["lint", "-c", "a", "b"])
+        self.assertEqual(batch_exec.call_args_list[1].args[0], ["lint", "-c", "c"])
 
 
 class PythonGateTest(unittest.TestCase):
