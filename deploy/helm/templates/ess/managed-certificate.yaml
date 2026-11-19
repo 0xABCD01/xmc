@@ -21,5 +21,4 @@ spec:
   domains:
   - api.{{ .Values.environment }}.{{ .Values.domainSuffix }}
   - grpc.api.{{ .Values.environment }}.{{ .Values.domainSuffix }}
-  - metrics-ingest.api.{{ .Values.environment }}.{{ .Values.domainSuffix }}
 {{- end }}

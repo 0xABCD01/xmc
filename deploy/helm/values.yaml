@@ -197,6 +197,9 @@ gateway:
   enabled: true
   name: "xmc-gateway"
   className: "gke-l7-global-external-managed"
+  lbProxyCidrs:
+    - 130.211.0.0/22
+    - 35.191.0.0/16
   staticIp: "YOUR_GATEWAY_STATIC_IP"
   uiHostname: "YOUR_UI_HOSTNAME"
   apiHostname: "YOUR_API_HOSTNAME"

@@ -45,8 +45,6 @@ type Config struct {
 	ProjectID             string
 	ComponentsNamespace   string
 	RequireAuth           bool
-	AuthToken             string
-	AuthTokenFile         string
 	JWTSecret             string
 }
 
@@ -71,8 +69,6 @@ type Flags struct {
 	ProjectID             string
 	ComponentsNamespace   string
 	RequireAuth           bool
-	AuthToken             string
-	AuthTokenFile         string
 	JWTSecret             string
 }
 
@@ -106,8 +102,6 @@ func RegisterFlags(fs *flag.FlagSet) *Flags {
 	fs.Bool("enable_components", true, "Deprecated: ignored; components are always enabled.")
 	fs.StringVar(&f.ComponentsNamespace, "components_namespace", "xmc", "Kubernetes namespace containing the redpanda Component CR.")
 	fs.BoolVar(&f.RequireAuth, "require_auth", false, "Require authentication on the metrics ingestion endpoint.")
-	fs.StringVar(&f.AuthToken, "auth_token", "", "Pre-shared bearer token for authentication.")
-	fs.StringVar(&f.AuthTokenFile, "auth_token_file", "", "File containing pre-shared bearer token for authentication.")
 	fs.StringVar(&f.JWTSecret, "jwt_secret", "", "Secret for JWT authentication.")
 	return f
 }
@@ -130,13 +124,6 @@ func LoadConfig(optionalFlags ...*Flags) (*Config, error) {
 	effectiveComponentsNS := getEnvOrDefault(f.ComponentsNamespace, "xmc", "COMPONENTS_NAMESPACE")
 
 	requireAuth := f.RequireAuth || strings.ToLower(os.Getenv("INGESTION_REQUIRE_AUTH")) == "true"
-	authToken := getEnvOrDefault(f.AuthToken, "", "INGESTION_AUTH_TOKEN")
-	authTokenFile := getEnvOrDefault(f.AuthTokenFile, "", "INGESTION_AUTH_TOKEN_FILE")
-	if authTokenFile != "" {
-		if _, err := os.Stat(authTokenFile); err != nil {
-			return nil, fmt.Errorf("failed to access AuthTokenFile %q: %w", authTokenFile, err)
-		}
-	}
 	jwtSecret := getEnvOrDefault(f.JWTSecret, "", "JWT_SECRET")
 
 	jwtSecretFile := getEnvOrDefault("", "", "JWT_SECRET_FILE")
@@ -168,8 +155,6 @@ func LoadConfig(optionalFlags ...*Flags) (*Config, error) {
 		ProjectID:             strings.TrimSpace(f.ProjectID),
 		ComponentsNamespace:   strings.TrimSpace(effectiveComponentsNS),
 		RequireAuth:           requireAuth,
-		AuthToken:             authToken,
-		AuthTokenFile:         authTokenFile,
 		JWTSecret:             jwtSecret,
 	}
 

@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# Forked from stable-2026a 0.1.0; delta: requireAuth support
 
 {{- $ig := .Values.ingestionGatewayDeployment | default dict -}}
 {{- if or .Values.deployWorkload $ig.enabled -}}
@@ -58,8 +60,6 @@
 {{- $requireAuthRaw := ($ig.requireAuth | default $params.requireAuth | default false) | toString | lower | trim -}}
 {{- $requireAuth := or (eq $requireAuthRaw "true") (eq $requireAuthRaw "1") -}}
 {{- $jwtSecretName := ($ig.jwtSecretName | default $params.jwtSecretName | default "xmc-jwt-secret") | toString -}}
-{{- $oidcAudience := ($ig.oidcAudience | default $params.oidcAudience | default "") | toString -}}
-{{- $enableOIDC := (ne $oidcAudience "") -}}
 {{- $replicas := 1 -}}
 {{- if and (hasKey $ig "replicas") (not (kindIs "invalid" $ig.replicas)) (ne ($ig.replicas | toString | trim) "") -}}
   {{- $replicas = ($ig.replicas | toString | trim | int) -}}
@@ -118,7 +118,6 @@ spec:
       - name: auth-secrets
         secret:
           secretName: {{ $jwtSecretName | quote }}
-          optional: true
       {{- end }}
       {{- end }}
       containers:
@@ -155,8 +154,8 @@ spec:
         ports:
         - containerPort: {{ $port }}
           name: http-port
-        env:
         {{- if $requireAuth }}
+        env:
         - name: INGESTION_REQUIRE_AUTH
           value: "true"
         - name: JWT_SECRET_FILE

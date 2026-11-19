@@ -16,58 +16,28 @@ package ingestiongateway
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"net/http"
-	"os"
 	"strings"
 
-	"xmanager_cloud/internal/logging"
 	"xmanager_cloud/pkg/auth/oauth2"
 )
 
 // AuthMiddleware enforces Bearer token authentication.
 type AuthMiddleware struct {
-	Config    *Config
-	Metrics   *GatewayMetrics
-	TokenList []string
+	Config  *Config
+	Metrics *GatewayMetrics
 }
 
 func NewAuthMiddleware(cfg *Config, metrics *GatewayMetrics) *AuthMiddleware {
-	am := &AuthMiddleware{
+	return &AuthMiddleware{
 		Config:  cfg,
 		Metrics: metrics,
 	}
-
-	if cfg.AuthToken != "" {
-		am.TokenList = parseCommaNewlineSeparated(cfg.AuthToken)
-	}
-	if cfg.AuthTokenFile != "" {
-		if content, err := os.ReadFile(cfg.AuthTokenFile); err == nil {
-			am.TokenList = append(am.TokenList, parseCommaNewlineSeparated(string(content))...)
-		} else {
-			logging.Error(context.Background(), "Failed to read AuthTokenFile", "error", err)
-		}
-	}
-
-	return am
-}
-
-func parseCommaNewlineSeparated(s string) []string {
-	var result []string
-	for _, f := range strings.FieldsFunc(s, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\r' || r == ' '
-	}) {
-		if f != "" {
-			result = append(result, f)
-		}
-	}
-	return result
 }
 
 func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !am.Config.RequireAuth && len(am.TokenList) == 0 && am.Config.JWTSecret == "" {
+		if !am.Config.RequireAuth && am.Config.JWTSecret == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -95,16 +65,7 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 }
 
 func (am *AuthMiddleware) validateToken(ctx context.Context, tokenStr string) bool {
-	// 1. Check pre-shared static tokens
-	tokenSha := sha256.Sum256([]byte(tokenStr))
-	for _, t := range am.TokenList {
-		tSha := sha256.Sum256([]byte(t))
-		if subtle.ConstantTimeCompare(tokenSha[:], tSha[:]) == 1 {
-			return true
-		}
-	}
-
-	// 2. Check JWT
+	// Check JWT
 	if am.Config.JWTSecret != "" {
 		if _, err := oauth2.ParseSessionToken(tokenStr, []byte(am.Config.JWTSecret), oauth2.CLIAudience, oauth2.FrontendAudience); err == nil {
 			return true

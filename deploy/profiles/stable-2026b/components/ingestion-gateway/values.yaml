@@ -16,7 +16,11 @@ parameters:
   topicName: "xmc-metrics"
   minPartitions: 128
   minReplicas: 1
-  requireAuth: true
+  requireAuth: false
+  gatewayEnabled: true
+  gatewayName: "xmc-gateway"
+  gatewayHostname: ""
+  gatewayLbProxyCidrs: "130.211.0.0/22,35.191.0.0/16"
 minReplicas: 2
 maxReplicas: 10
 serviceAccountName: "default"

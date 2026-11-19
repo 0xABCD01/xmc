@@ -66,6 +66,7 @@ go_library(
 go_test(
     name = "ingestiongateway_test",
     srcs = [
+        "auth_test.go",
         "component_resolver_test.go",
         "config_test.go",
         "handler_test.go",

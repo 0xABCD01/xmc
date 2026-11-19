@@ -26,7 +26,7 @@ import urllib.parse
 from collections.abc import Mapping
 from typing import Any
 
-from xmc.dist_harvest import harvest_client_metadata
+from xmc.dist_harvest import harvest_client_metadata, resolve_bearer_token
 
 
 class SendResult(enum.Enum):
@@ -112,9 +112,9 @@ class HTTPClient:
             self._headers["X-Replica-ID"] = self._replica_id
 
         env_dict = env if env is not None else os.environ
-        api_key = env_dict.get("XMC_API_KEY") or env_dict.get("XMC_AUTH_TOKEN")
+        api_key = resolve_bearer_token(env_dict)
         if api_key:
-            self._headers["Authorization"] = f"Bearer {api_key.strip()}"
+            self._headers["Authorization"] = f"Bearer {api_key}"
 
         if default_headers:
             self._headers.update(default_headers)
