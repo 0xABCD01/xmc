@@ -138,14 +138,15 @@ experiment's largest work unit ID. ESS checks, in order
 | Check | Error |
 | :--- | :--- |
 | The caller is authenticated. | `UNAUTHENTICATED` |
-| `parent` is an experiment name, the request holds 1 to 500 requests, and each request and its `work_unit` are set. The work units are not otherwise validated yet. | `INVALID_ARGUMENT` |
+| `parent` is an experiment name. | `INVALID_ARGUMENT` |
+| The caller's verified email equals the `hpo` component parameter `studyControllerServiceAccount` (ASCII case-insensitive). XID ACLs are not consulted. A missing `hpo` component or an empty parameter rejects every caller. This check runs before the experiment is read or the payload is validated. | `PERMISSION_DENIED` |
 | The experiment exists. | `NOT_FOUND` |
 | The experiment is a `STUDY`; other types are not supported yet. | `UNIMPLEMENTED` |
-| In the creation transaction, the caller's verified email equals the `hpo` component parameter `studyControllerServiceAccount` (ASCII case-insensitive). XID ACLs are not consulted. A missing `hpo` component or an empty parameter rejects every caller. | `PERMISSION_DENIED` |
+| The request holds 1 to 500 requests, and each request and its `work_unit` are set. The work units are not otherwise validated yet. | `INVALID_ARGUMENT` |
 
 ESS then writes all work units in one transaction
 ([`internal/workunit/batchcreateworkunits.go`](../../internal/workunit/batchcreateworkunits.go)): it
-checks the caller against the `hpo` component, reads the experiment once, allocates the IDs with a
+checks the caller against the `hpo` component again, reads the experiment once, allocates the IDs with a
 single next-ID read, inserts each work unit, and updates the experiment's denormalized
 status and resources once. After the commit it records a creation operation and enqueues the
 creation task of each work unit in turn. If either fails, the RPC returns `INTERNAL` naming that

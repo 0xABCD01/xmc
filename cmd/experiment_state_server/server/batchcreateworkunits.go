@@ -37,41 +37,61 @@ func (h *WorkUnitHandler) BatchCreateWorkUnits(ctx context.Context, req *msgpb.B
 	ctx = logging.InjectOperation(ctx, "")
 	logging.Info(ctx, "Batch create work units", "parent", req.GetParent(), "count", len(req.GetRequests()))
 
-	// 1. Authenticate the caller.
-	email, _, err := h.auth.AuthenticateUserFromContext(ctx)
+	// 1-3. Authenticate the caller, validate the parent, and require the study controller.
+	xid, email, err := h.authorizeStudyController(ctx, req.GetParent())
 	if err != nil {
 		return nil, err
 	}
-
-	// 2. Validate the parent and the shape of the request.
-	xid, err := validator.ValidateBatchCreateWorkUnitsRequest(req)
-	if err != nil {
-		logging.Warn(ctx, "BatchCreateWorkUnits validation failed", "error", err)
-		return nil, fmt.Errorf("BatchCreateWorkUnits validation failed: %w", err)
-	}
 	ctx = logging.WithExperimentName(ctx, req.GetParent())
 
-	// 3. Only STUDY experiments are supported.
+	// 4. Only STUDY experiments are supported.
 	exp, err := h.fetchBatchCreateParent(ctx, xid)
 	if err != nil {
 		return nil, err
 	}
 
-	// 4. Copy each work unit with its default values and initial execution.
+	// 5. Validate the shape of the request.
+	if _, err := validator.ValidateBatchCreateWorkUnitsRequest(req); err != nil {
+		logging.Warn(ctx, "BatchCreateWorkUnits validation failed", "error", err)
+		return nil, fmt.Errorf("BatchCreateWorkUnits validation failed: %w", err)
+	}
+
+	// 6. Copy each work unit with its default values and initial execution.
 	wus := newStudyTrials(xid, req.GetRequests())
 
-	// 5. Persist all work units in one transaction, which requires the study controller.
+	// 7. Persist all work units in one transaction.
 	created, err := workunit.BatchCreateWorkUnits(ctx, h.storage, xid, email, wus)
 	if err != nil {
 		return nil, batchCreateError(err)
 	}
 
-	// 6. Record an operation per work unit and enqueue their creation tasks.
+	// 8. Record an operation per work unit and enqueue their creation tasks.
 	if err := h.actuateCreatedWorkUnits(ctx, xid, exp.GetPriority(), created, email); err != nil {
 		return nil, err
 	}
 	logging.Info(ctx, "Batch created work units", "count", len(created))
 	return &msgpb.BatchCreateWorkUnitsResponse{WorkUnits: created}, nil
+}
+
+// authorizeStudyController authenticates the caller, validates the parent experiment name, and
+// requires the caller to be the study controller. It runs before the experiment is read or the
+// payload is validated, so that other callers learn nothing about either; BatchCreateWorkUnits
+// repeats the authorization inside the creation transaction.
+func (h *WorkUnitHandler) authorizeStudyController(ctx context.Context, parent string) (int64, string, error) {
+	email, _, err := h.auth.AuthenticateUserFromContext(ctx)
+	if err != nil {
+		return 0, "", err
+	}
+	xid, err := validator.ValidateExperimentName(parent)
+	if err != nil {
+		logging.Warn(ctx, "Failed to validate experiment name", "error", err)
+		return 0, "", fmt.Errorf("parent must be in the format experiments/{xid}: %v: %w", err, grpcerr.ErrInvalidArgument)
+	}
+	if err := workunit.AuthorizeStudyController(ctx, h.storage.Components(), email); err != nil {
+		logging.Warn(ctx, "BatchCreateWorkUnits authorization failed", "user", email, "error", err)
+		return 0, "", batchCreateError(err)
+	}
+	return xid, email, nil
 }
 
 // fetchBatchCreateParent reads experiment xid and requires it to be a STUDY.

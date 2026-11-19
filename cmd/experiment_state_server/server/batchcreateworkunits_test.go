@@ -181,6 +181,17 @@ func TestBatchCreateWorkUnits_Rejections(t *testing.T) {
 			return st
 		}, wantCode: codes.Unimplemented},
 		{name: "caller is not the study controller", storage: func() *batchStorage { return newBatchStorage("controller@p.iam.gserviceaccount.com") }, wantCode: codes.PermissionDenied},
+		{name: "other caller with an invalid payload", storage: func() *batchStorage { return newBatchStorage("controller@p.iam.gserviceaccount.com") }, req: batchRequest(0, nil), wantCode: codes.PermissionDenied},
+		{name: "other caller with a missing experiment", storage: func() *batchStorage {
+			st := newBatchStorage("controller@p.iam.gserviceaccount.com")
+			st.Experiment = nil
+			return st
+		}, wantCode: codes.PermissionDenied},
+		{name: "other caller with a standard experiment", storage: func() *batchStorage {
+			st := newBatchStorage("controller@p.iam.gserviceaccount.com")
+			st.Experiment.ExperimentType = msgpb.Experiment_STANDARD
+			return st
+		}, wantCode: codes.PermissionDenied},
 		{name: "no study controller configured", storage: func() *batchStorage { return newBatchStorage("") }, wantCode: codes.PermissionDenied},
 		{name: "hpo component absent", storage: func() *batchStorage {
 			st := newBatchStorage("test@example.com")
