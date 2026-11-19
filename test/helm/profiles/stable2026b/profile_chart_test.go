@@ -19,15 +19,10 @@
 package stable2026b_test
 
 import (
-	"io/fs"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"gopkg.in/yaml.v3"
 
-	stable2026bcharts "xmanager_cloud/deploy/profiles/stable-2026b"
 	"xmanager_cloud/test/helm/profiles/profilecontract"
 )
 
