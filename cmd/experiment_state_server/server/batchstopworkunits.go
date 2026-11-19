@@ -127,12 +127,12 @@ var stopSkippedStates = []msgpb.WorkUnitStatus_WorkUnitState{
 	msgpb.WorkUnitStatus_COMPLETED,
 }
 
-// filterStoppableWorkUnits returns only work units that are not already in a completed or stopped state.
+// filterStoppableWorkUnits returns only work units that are in a stoppable state.
 func filterStoppableWorkUnits(ctx context.Context, workUnits []*msgpb.WorkUnit) []*msgpb.WorkUnit {
 	stoppable := make([]*msgpb.WorkUnit, 0, len(workUnits))
 	for _, workUnit := range workUnits {
 		if !isWorkUnitStoppable(workUnit) {
-			logging.Info(ctx, "Skipping stop for work unit in completed or stopped state",
+			logging.Info(ctx, "Skipping stop for non-stoppable work unit",
 				"work_unit", workUnit.GetName(),
 				"state", workUnit.GetCurrentWorkUnitExecution().GetStatus().GetState(),
 			)
