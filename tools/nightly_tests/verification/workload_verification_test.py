@@ -187,8 +187,40 @@ class WorkloadVerificationTest(unittest.TestCase):
                     "subprocess.run",
                     return_value=SimpleNamespace(returncode=rc, stdout=out, stderr="not found"),
                 ),
+                mock.patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
             ):
                 self.assertFalse(workload_verification.cluster_has_managed_xprof_bucket("xmc"))
+                self.assertEqual(mock_stdout.getvalue(), "")
+
+        # Empty K8S_NAMESPACE falls back to 'xmc' and non-NotFound errors emit diagnostics
+        with (
+            mock.patch.dict("os.environ", {"K8S_NAMESPACE": ""}, clear=True),
+            mock.patch("shutil.which", return_value="/usr/bin/kubectl"),
+            mock.patch(
+                "subprocess.run",
+                return_value=SimpleNamespace(
+                    returncode=1,
+                    stdout="",
+                    stderr="Error from server (Forbidden): configmaps is forbidden",
+                ),
+            ) as mock_run,
+            mock.patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            self.assertFalse(workload_verification.cluster_has_managed_xprof_bucket())
+            self.assertEqual(mock_run.call_args[0][0][5], "xmc")
+            self.assertIn(
+                "kubectl probe for managed-xprof-gcs-config failed", mock_stdout.getvalue()
+            )
+
+        with (
+            mock.patch("shutil.which", return_value="/usr/bin/kubectl"),
+            mock.patch("subprocess.run", side_effect=OSError("kubectl exec error")),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            self.assertFalse(workload_verification.cluster_has_managed_xprof_bucket("xmc"))
+            self.assertIn(
+                "Failed to probe managed-xprof-gcs-config in 'xmc'", mock_stdout.getvalue()
+            )
 
     def test_resolve_require_managed_xprof_url(self) -> None:
         with (

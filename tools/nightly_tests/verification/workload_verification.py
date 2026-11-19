@@ -110,7 +110,7 @@ def cluster_has_managed_xprof_bucket(
     """Returns True when the target cluster renders ConfigMap managed-xprof-gcs-config."""
     if not shutil.which("kubectl"):
         return False
-    target_ns = namespace or os.environ.get("K8S_NAMESPACE", "xmc")
+    target_ns = namespace or os.environ.get("K8S_NAMESPACE") or "xmc"
     try:
         res = subprocess.run(
             [
@@ -128,9 +128,21 @@ def cluster_has_managed_xprof_bucket(
             check=False,
             timeout=timeout_sec,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(
+            f"  [!] Failed to probe managed-xprof-gcs-config in '{target_ns}': "
+            f"{exc}; skipping xprof_url check."
+        )
         return False
-    return res.returncode == 0 and res.stdout.strip().startswith("gs://")
+    if res.returncode != 0:
+        err = res.stderr.strip()
+        if "NotFound" not in err and "not found" not in err.lower():
+            print(
+                f"  [!] kubectl probe for managed-xprof-gcs-config failed "
+                f"(rc={res.returncode}): {err}"
+            )
+        return False
+    return res.stdout.strip().startswith("gs://")
 
 
 def resolve_require_managed_xprof_url(expected_artifact_types: Sequence[str]) -> bool:
