@@ -41,8 +41,21 @@ _LICENSE_IGNORE_PATTERNS = (
 )
 
 
+_BAZEL_PATHSPECS = (
+    "BUILD",
+    ":(glob)**/BUILD",
+    "BUILD.bazel",
+    ":(glob)**/BUILD.bazel",
+    "*.bzl",
+    ":(glob)**/*.bzl",
+    "WORKSPACE",
+    "MODULE.bazel",
+)
+_GOOGLE_BUILDIFIER_WARNINGS = "-LANG_proto_library-single-deps,-inline-deps"
+
+
 def check_bazel(ctx: gates.RunContext) -> None:
-    """Formats or validates Bazel files via `buildifier`."""
+    """Formats and validates Bazel files via `buildifier`."""
     buildifier = gates.resolve_go_tool(
         ctx,
         "buildifier",
@@ -51,17 +64,35 @@ def check_bazel(ctx: gates.RunContext) -> None:
     if not buildifier:
         return
     print("--> Running Bazel Formatter & Linter (Buildifier)...")
-    files = gates.walk_repo_files(
-        ["."], suffixes=(".bzl",), exact_names=("BUILD", "BUILD.bazel", "WORKSPACE", "MODULE.bazel")
+    files = gates.git_ls_files(_BAZEL_PATHSPECS, include_untracked=True)
+    if not files:
+        return
+    probe = [
+        buildifier,
+        "-lint=warn",
+        f"-warnings={_GOOGLE_BUILDIFIER_WARNINGS}",
+        "-mode=check",
+        "-type=build",
+    ]
+    warn_args = (
+        [f"-warnings={_GOOGLE_BUILDIFIER_WARNINGS}"]
+        if gates.exec_cmd(probe, quiet_out=True, quiet_err=True, stdin_devnull=True).returncode == 0
+        else []
     )
-    gates.run_mode_command(
-        ctx,
-        [buildifier],
-        check_args=["-lint=warn", "-warnings=unused-variable", "-mode=check"],
-        fix_args=["-lint=fix", "-warnings=unused-variable", "-mode=fix"],
-        failure_msg="Bazel buildifier check failed.",
-        files=files,
-    )
+    for batch in gates.chunked(files, 500):
+        if (
+            ctx.mode == "fix"
+            and gates.exec_cmd(
+                [buildifier, "-lint=fix", *warn_args, "-mode=fix", *batch]
+            ).returncode
+            != 0
+        ):
+            ctx.failed = True
+        if (
+            gates.exec_cmd([buildifier, "-lint=warn", *warn_args, "-mode=check", *batch]).returncode
+            != 0
+        ):
+            ctx.fail("Bazel buildifier check failed.")
 
 
 def _check_gofmt(ctx: gates.RunContext) -> None:

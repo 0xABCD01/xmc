@@ -40,17 +40,50 @@ from tools.lint import (  # noqa: E402
 
 class LanguageChecksTest(unittest.TestCase):
     def test_check_bazel_invokes_buildifier(self):
-        ctx = gates.RunContext(mode="check")
+        ctx = gates.RunContext(mode="fix")
         with (
             mock.patch.object(gates, "resolve_go_tool", return_value="/bin/buildifier"),
-            mock.patch.object(gates, "walk_repo_files", return_value=["BUILD.bazel"]),
-            mock.patch.object(gates, "run_mode_command") as run_mode,
+            mock.patch.object(gates, "git_ls_files", return_value=["BUILD.bazel"]),
+            mock.patch.object(
+                gates,
+                "exec_cmd",
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, "", ""),  # Google warning probe
+                    subprocess.CompletedProcess([], 0, "", ""),  # fix pass
+                    subprocess.CompletedProcess([], 0, "", ""),  # warn pass
+                ],
+            ) as exec_mock,
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
             runner.check_bazel(ctx)
-        run_mode.assert_called_once()
-        self.assertEqual(run_mode.call_args.args[1], ["/bin/buildifier"])
-        self.assertEqual(run_mode.call_args.kwargs["files"], ["BUILD.bazel"])
+        self.assertFalse(ctx.failed)
+        self.assertEqual(exec_mock.call_count, 3)
+        self.assertTrue(exec_mock.call_args_list[0].kwargs["stdin_devnull"])
+        self.assertIn(
+            "-warnings=-LANG_proto_library-single-deps,-inline-deps",
+            exec_mock.call_args_list[2].args[0],
+        )
+
+        ctx_oss = gates.RunContext(mode="check")
+        with (
+            mock.patch.object(gates, "resolve_go_tool", return_value="/bin/buildifier"),
+            mock.patch.object(gates, "git_ls_files", return_value=["BUILD.bazel"]),
+            mock.patch.object(
+                gates,
+                "exec_cmd",
+                side_effect=[
+                    subprocess.CompletedProcess([], 1, "", ""),  # OSS buildifier rejects flag
+                    subprocess.CompletedProcess([], 0, "", ""),
+                ],
+            ) as exec_oss,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            runner.check_bazel(ctx_oss)
+        self.assertFalse(ctx_oss.failed)
+        self.assertNotIn(
+            "-warnings=-LANG_proto_library-single-deps,-inline-deps",
+            exec_oss.call_args_list[1].args[0],
+        )
 
     def test_check_go_runs_all_subchecks_in_check_mode(self):
         ctx = gates.RunContext(mode="check")

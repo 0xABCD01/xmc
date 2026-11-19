@@ -112,6 +112,7 @@ def exec_cmd(
     quiet_out: bool = False,
     quiet_err: bool = False,
     errors: str | None = None,
+    stdin_devnull: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Executes `cmd` cleanly, returning returncode `127` on `OSError`."""
     out = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet_out else None)
@@ -123,6 +124,7 @@ def exec_cmd(
             cmd_list,
             cwd=str(cwd) if cwd is not None else None,
             env=env,
+            stdin=subprocess.DEVNULL if stdin_devnull else None,
             stdout=out,
             stderr=err,
             text=True,
@@ -160,13 +162,17 @@ def staged_paths_match(diff_filter: str, pattern: str) -> bool:
     return any(regex.search(path) for path in git_staged_paths(diff_filter, no_renames=True))
 
 
-def git_ls_files(pathspecs: Sequence[str], *, base_dir: Path = REPO_ROOT) -> list[str]:
+def git_ls_files(
+    pathspecs: Sequence[str],
+    *,
+    include_untracked: bool = False,
+    base_dir: Path = REPO_ROOT,
+) -> list[str]:
     """Lists existing NUL-delimited sorted unique paths from `git ls-files`, exiting 1 on error."""
-    res = exec_cmd(
-        ["git", "-c", "core.quotePath=false", "ls-files", "-z", "--", *pathspecs],
-        cwd=base_dir,
-        capture=True,
-    )
+    cmd = ["git", "-c", "core.quotePath=false", "ls-files", "-z"]
+    if include_untracked:
+        cmd.extend(["--cached", "--others", "--exclude-standard"])
+    res = exec_cmd([*cmd, "--", *pathspecs], cwd=base_dir, capture=True)
     if res.returncode != 0:
         print("❌ git ls-files failed; cannot select pre-commit targets.", file=sys.stderr)
         if res.stderr:
