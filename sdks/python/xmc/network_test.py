@@ -67,7 +67,8 @@ class TestHTTPClient(unittest.TestCase):
         mock_conn.getresponse.return_value = mock_response
         mock_http_conn_cls.return_value = mock_conn
 
-        client = HTTPClient("http://example.com:8080")
+        env = {"XMC_API_KEY": "test-auth-token"}
+        client = HTTPClient("http://example.com:8080", env=env)
         result = client.send(
             body='{"metric_name": "loss", "metric_value": 0.5}',
             path="/v1/metrics",
@@ -80,6 +81,7 @@ class TestHTTPClient(unittest.TestCase):
         headers = kwargs.get("headers", {})
         self.assertEqual(headers.get("Connection"), "keep-alive")
         self.assertEqual(headers.get("Content-Type"), "application/json")
+        self.assertEqual(headers.get("Authorization"), "Bearer test-auth-token")
 
     @mock.patch("http.client.HTTPSConnection")
     def test_https_connection_created(self, mock_https_conn_cls: mock.MagicMock) -> None:

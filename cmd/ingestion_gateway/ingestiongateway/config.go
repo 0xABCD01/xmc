@@ -16,12 +16,15 @@ package ingestiongateway
 
 import (
 	"cmp"
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"xmanager_cloud/internal/logging"
 )
 
 // Config holds the runtime configuration for the Ingestion Gateway.
@@ -44,6 +47,12 @@ type Config struct {
 	TLSInsecureSkipVerify bool
 	ProjectID             string
 	ComponentsNamespace   string
+	RequireAuth           bool
+	AuthToken             string
+	AuthTokenFile         string
+	JWTSecret             string
+	EnableGoogleOIDC      bool
+	OIDCAudience          string
 }
 
 // Flags holds the CLI flag value bindings for FlagSet registration.
@@ -66,6 +75,12 @@ type Flags struct {
 	TLSInsecureSkipVerify bool
 	ProjectID             string
 	ComponentsNamespace   string
+	RequireAuth           bool
+	AuthToken             string
+	AuthTokenFile         string
+	JWTSecret             string
+	EnableGoogleOIDC      bool
+	OIDCAudience          string
 }
 
 // RegisterFlags registers the ingestion gateway CLI flags on the given FlagSet and returns a Flags struct binding.
@@ -97,6 +112,12 @@ func RegisterFlags(fs *flag.FlagSet) *Flags {
 	// crash pods during a rolling upgrade between those chart generations.
 	fs.Bool("enable_components", true, "Deprecated: ignored; components are always enabled.")
 	fs.StringVar(&f.ComponentsNamespace, "components_namespace", "xmc", "Kubernetes namespace containing the redpanda Component CR.")
+	fs.BoolVar(&f.RequireAuth, "require_auth", false, "Require authentication on the metrics ingestion endpoint.")
+	fs.StringVar(&f.AuthToken, "auth_token", "", "Pre-shared bearer token for authentication.")
+	fs.StringVar(&f.AuthTokenFile, "auth_token_file", "", "File containing pre-shared bearer token for authentication.")
+	fs.StringVar(&f.JWTSecret, "jwt_secret", "", "Secret for JWT authentication.")
+	fs.BoolVar(&f.EnableGoogleOIDC, "enable_google_oidc", false, "Enable Google OIDC token validation.")
+	fs.StringVar(&f.OIDCAudience, "oidc_audience", "", "Expected audience for OIDC tokens.")
 	return f
 }
 
@@ -117,6 +138,20 @@ func LoadConfig(optionalFlags ...*Flags) (*Config, error) {
 	effectiveTopicName := getEnvOrDefault(f.TopicName, "xmc-metrics", "TOPIC_NAME", "REDPANDA_TOPIC")
 	effectiveComponentsNS := getEnvOrDefault(f.ComponentsNamespace, "xmc", "COMPONENTS_NAMESPACE")
 
+	requireAuth := f.RequireAuth || strings.ToLower(os.Getenv("INGESTION_REQUIRE_AUTH")) == "true"
+	authToken := getEnvOrDefault(f.AuthToken, "", "INGESTION_AUTH_TOKEN")
+	authTokenFile := getEnvOrDefault(f.AuthTokenFile, "", "INGESTION_AUTH_TOKEN_FILE")
+	jwtSecret := getEnvOrDefault(f.JWTSecret, "", "JWT_SECRET")
+
+	jwtSecretFile := getEnvOrDefault("", "", "JWT_SECRET_FILE")
+	if jwtSecret == "" && jwtSecretFile != "" {
+		if content, err := os.ReadFile(jwtSecretFile); err == nil {
+			jwtSecret = strings.TrimSpace(string(content))
+		} else {
+			logging.Error(context.Background(), "Failed to read JWT_SECRET_FILE", "error", err)
+		}
+	}
+
 	cfg := &Config{
 		Port:                  strings.TrimSpace(effectivePort),
 		MessageBus:            strings.ToLower(effectiveMessageBus),
@@ -136,6 +171,12 @@ func LoadConfig(optionalFlags ...*Flags) (*Config, error) {
 		TLSInsecureSkipVerify: f.TLSInsecureSkipVerify,
 		ProjectID:             strings.TrimSpace(f.ProjectID),
 		ComponentsNamespace:   strings.TrimSpace(effectiveComponentsNS),
+		RequireAuth:           requireAuth,
+		AuthToken:             authToken,
+		AuthTokenFile:         authTokenFile,
+		JWTSecret:             jwtSecret,
+		EnableGoogleOIDC:      f.EnableGoogleOIDC,
+		OIDCAudience:          f.OIDCAudience,
 	}
 
 	// SASL is a Kafka wire-protocol concept. Skip the secret file reads in Pub/Sub mode so that a

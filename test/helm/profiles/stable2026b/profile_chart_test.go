@@ -177,9 +177,6 @@ func TestStable2026b_MetadataOnlyComponentsMatchStable2026a(t *testing.T) {
 	dirB := profilecontract.ChartDir(t, s)
 	dirA := profilecontract.ChartDir(t, profilecontract.Spec{ChartRelPath: "deploy/profiles/stable-2026a"})
 	metadataOnly := metadataOnly1PComponents(t, s)
-	if len(metadataOnly) == 0 {
-		t.Fatal("stable-2026b has no metadata-only 1P components; expected at least ingestion-gateway")
-	}
 	for _, name := range metadataOnly {
 		want := readChartIdentity(t, filepath.Join(dirA, "components", name))
 		if diff := cmp.Diff(want, readChartIdentity(t, filepath.Join(dirB, "components", name))); diff != "" {

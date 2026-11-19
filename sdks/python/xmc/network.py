@@ -18,6 +18,7 @@ import contextlib
 import enum
 import http.client
 import json
+import os
 import random
 import threading
 import time
@@ -109,6 +110,12 @@ class HTTPClient:
             self._headers["X-Job-Name"] = self._job_name
         if self._replica_id:
             self._headers["X-Replica-ID"] = self._replica_id
+
+        env_dict = env if env is not None else os.environ
+        api_key = env_dict.get("XMC_API_KEY") or env_dict.get("XMC_AUTH_TOKEN")
+        if api_key:
+            self._headers["Authorization"] = f"Bearer {api_key}"
+
         if default_headers:
             self._headers.update(default_headers)
 

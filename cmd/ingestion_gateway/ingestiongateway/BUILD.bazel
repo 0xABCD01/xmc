@@ -19,6 +19,7 @@ package(default_visibility = ["//visibility:private"])
 go_library(
     name = "ingestiongateway",
     srcs = [
+        "auth.go",
         "component_resolver.go",
         "config.go",
         "handler.go",
@@ -41,6 +42,7 @@ go_library(
         "//internal/logging",
         "//internal/security/keyreloader",
         "//pkg/apis/metrics",
+        "//pkg/auth/oauth2",
         "//pkg/components/crreader",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/collectors",
@@ -52,6 +54,7 @@ go_library(
         "@com_github_twmb_franz_go_pkg_kadm//:kadm",
         "@com_google_cloud_go_pubsub//:pubsub",
         "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
+        "@org_golang_google_api//idtoken",
         "@org_golang_google_api//option",
         "@org_golang_google_api//support/bundler",
         "@org_golang_google_grpc//codes",

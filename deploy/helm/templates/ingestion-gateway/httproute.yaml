@@ -1,0 +1,60 @@
+{{- if and .Values.gateway.enabled .Values.components.ingestionGateway.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: metrics-ingest-route
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.name }}
+      sectionName: https
+  hostnames:
+    - {{ include "xmanager-cloud.metricsIngestHostname" . | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/metrics
+      backendRefs:
+        - name: ingestion-gateway-service
+          port: 8080
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: ingestion-gateway-hc-policy
+  namespace: {{ .Release.Namespace }}
+spec:
+  default:
+    config:
+      type: HTTP
+      httpHealthCheck:
+        port: 8080
+        requestPath: /readyz
+  targetRef:
+    group: ""
+    kind: Service
+    name: ingestion-gateway-service
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingestion-gateway-external-lb-network-policy
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: ingestion-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Allow Google Cloud External Load Balancer and Health Check IP ranges
+        - ipBlock:
+            cidr: 130.211.0.0/22
+        - ipBlock:
+            cidr: 35.191.0.0/16
+      ports:
+        - protocol: TCP
+          port: 8080
+{{- end }}

@@ -252,6 +252,7 @@ deployment_groups:
       - "$(vars.environment).$(vars.domain_name)"
       - "api.$(vars.environment).$(vars.domain_name)"
       - "grpc.$(vars.environment).$(vars.domain_name)"
+      - "metrics-ingest.$(vars.environment).$(vars.domain_name)"
 
 - group: compute
   modules:

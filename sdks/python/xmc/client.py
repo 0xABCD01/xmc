@@ -101,7 +101,7 @@ class Client:
             self._disabled = _is_metrics_disabled_env(env=env_dict)
 
         self.base_url = str(base_url).rstrip("/")
-        self.api_key = env_dict.get("XMC_API_KEY")
+        self.api_key = env_dict.get("XMC_API_KEY") or env_dict.get("XMC_AUTH_TOKEN")
         self.timeout = 30.0
 
         (
