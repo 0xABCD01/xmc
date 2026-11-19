@@ -16,6 +16,7 @@ package ingestiongateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
 	"os"
@@ -85,8 +86,10 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 
 		// 1. Check pre-shared static tokens
+		tokenSha := sha256.Sum256([]byte(tokenStr))
 		for _, t := range am.TokenList {
-			if subtle.ConstantTimeCompare([]byte(tokenStr), []byte(t)) == 1 {
+			tSha := sha256.Sum256([]byte(t))
+			if subtle.ConstantTimeCompare(tokenSha[:], tSha[:]) == 1 {
 				next.ServeHTTP(w, r)
 				return
 			}

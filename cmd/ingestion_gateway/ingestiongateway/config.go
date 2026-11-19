@@ -141,6 +141,11 @@ func LoadConfig(optionalFlags ...*Flags) (*Config, error) {
 	requireAuth := f.RequireAuth || strings.ToLower(os.Getenv("INGESTION_REQUIRE_AUTH")) == "true"
 	authToken := getEnvOrDefault(f.AuthToken, "", "INGESTION_AUTH_TOKEN")
 	authTokenFile := getEnvOrDefault(f.AuthTokenFile, "", "INGESTION_AUTH_TOKEN_FILE")
+	if authTokenFile != "" {
+		if _, err := os.Stat(authTokenFile); err != nil {
+			return nil, fmt.Errorf("failed to access AuthTokenFile %q: %w", authTokenFile, err)
+		}
+	}
 	jwtSecret := getEnvOrDefault(f.JWTSecret, "", "JWT_SECRET")
 
 	jwtSecretFile := getEnvOrDefault("", "", "JWT_SECRET_FILE")
@@ -148,7 +153,7 @@ func LoadConfig(optionalFlags ...*Flags) (*Config, error) {
 		if content, err := os.ReadFile(jwtSecretFile); err == nil {
 			jwtSecret = strings.TrimSpace(string(content))
 		} else {
-			logging.Error(context.Background(), "Failed to read JWT_SECRET_FILE", "error", err)
+			return nil, fmt.Errorf("failed to read JWT_SECRET_FILE %q: %w", jwtSecretFile, err)
 		}
 	}
 
