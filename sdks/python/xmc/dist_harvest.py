@@ -182,6 +182,7 @@ def harvest_client_metadata(
 # Alias matching CamelCase specification for backward compatibility.
 GetReplicaIDAndSilenceStatus = get_replica_id_and_silence_status
 
+
 def resolve_bearer_token(env: Mapping[str, str] | None = None) -> str | None:
     """Extracts and strips the XMC API key from the environment.
 

@@ -84,9 +84,7 @@ class TestHTTPClient(unittest.TestCase):
         self.assertEqual(headers.get("Authorization"), "Bearer test-auth-token")
 
     @mock.patch("http.client.HTTPConnection")
-    def test_auth_headers_whitespace_and_empty(
-        self, mock_http_conn_cls: mock.MagicMock
-    ) -> None:
+    def test_auth_headers_whitespace_and_empty(self, mock_http_conn_cls: mock.MagicMock) -> None:
         mock_conn = mock.MagicMock()
         mock_response = mock.MagicMock()
         mock_response.status = 200
