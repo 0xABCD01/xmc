@@ -441,6 +441,7 @@ func TestStopOperationOnError(t *testing.T) {
 		wantUpdateWorkUnitOperation bool
 		wantDone                    bool
 		wantCode                    codes.Code
+		wantMessage                 string
 	}{
 		{
 			name:                        "no_error",
@@ -469,6 +470,7 @@ func TestStopOperationOnError(t *testing.T) {
 			wantUpdateWorkUnitOperation: true,
 			wantDone:                    true,
 			wantCode:                    codes.Internal,
+			wantMessage:                 "failed to add message to redis",
 		},
 		{
 			name:                        "update_op_error",
@@ -505,6 +507,11 @@ func TestStopOperationOnError(t *testing.T) {
 			}
 			if codes.Code(storage.GotOperationUpdate.Operation.GetError().GetCode()) != tc.wantCode {
 				t.Errorf("stopOperationOnError() updated operation with code = %v, want %v", codes.Code(storage.GotOperationUpdate.Operation.GetError().GetCode()), tc.wantCode)
+			}
+			if tc.wantMessage != "" {
+				if got := storage.GotOperationUpdate.Operation.GetError().GetMessage(); got != tc.wantMessage {
+					t.Errorf("stopOperationOnError() updated operation with message = %q, want %q", got, tc.wantMessage)
+				}
 			}
 			wantMask := &fmpb.FieldMask{Paths: []string{"done", "error"}}
 			if diff := cmp.Diff(wantMask, storage.GotOperationUpdate.UpdateMask, protocmp.Transform()); diff != "" {

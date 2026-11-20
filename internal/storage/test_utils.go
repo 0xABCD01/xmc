@@ -450,8 +450,8 @@ func (s *MockStorage) InsertWorkUnits(ctx context.Context, wus []*essmsgpb.WorkU
 
 // AddWorkUnitOperation mocks adding a work unit operation. It returns LROOp when set. Otherwise,
 // like real storage, it returns a new pending operation named after xid and wid, so callers that
-// later complete or fail the operation reach UpdateWorkUnitOperation. The default path rejects nil
-// metadata with grpcerr.ErrInvalidArgument, as the Spanner and Postgres backends do.
+// later complete or fail the operation reach UpdateWorkUnitOperation. Like both real backends, the
+// default path rejects nil metadata; like Postgres, the error wraps grpcerr.ErrInvalidArgument.
 func (s *MockStorage) AddWorkUnitOperation(ctx context.Context, xid int64, wid int64, metadata *essmsgpb.OperationMetadata) (*lropb.Operation, error) {
 	if s.AddWorkUnitOperationErr != nil {
 		return nil, s.AddWorkUnitOperationErr
@@ -475,7 +475,8 @@ func (s *MockStorage) AddWorkUnitOperation(ctx context.Context, xid int64, wid i
 // FetchUpdatingWorkUnits mocks fetching a batch of work units for update within a transaction.
 // Like real storage, it reads earlier writes: the base work unit is WorkUnit, or the last
 // InsertedWorkUnit when WorkUnit is unset, and its current execution is the last one written for
-// that wid through UpdateCurrentWorkUnitExecution.
+// that wid through UpdateCurrentWorkUnitExecution. Unlike real storage, the mock never rolls back,
+// so writes made by a failed transaction callback stay visible here.
 func (s *MockStorage) FetchUpdatingWorkUnits(ctx context.Context, xid int64, wids []int64) (map[int64]*essmsgpb.WorkUnit, error) {
 	if s.FetchWorkUnitErr != nil {
 		return nil, s.FetchWorkUnitErr
