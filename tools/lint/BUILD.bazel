@@ -90,6 +90,26 @@ py_test(
 )
 
 py_library(
+    name = "check_version_sync_lib",
+    srcs = ["check_version_sync.py"],
+    imports = ["../.."],
+    deps = [
+        "//tools/common:tool_utils",
+        "//tools/common:workspace_status_lib",
+    ],
+)
+
+py_test(
+    name = "check_version_sync_test",
+    srcs = ["check_version_sync_test.py"],
+    imports = ["../.."],
+    deps = [
+        ":check_version_sync_lib",
+        "//tools/common:tool_utils",
+    ],
+)
+
+py_library(
     name = "precommit_autostage_lib",
     srcs = ["precommit_autostage.py"],
     imports = ["../.."],

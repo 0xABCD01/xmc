@@ -18,6 +18,7 @@ py_library(
     name = "xmc",
     srcs = [
         "__init__.py",
+        "_version.py",
         "autolog.py",
         "buffer.py",
         "client.py",
