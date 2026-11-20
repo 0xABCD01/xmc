@@ -655,6 +655,7 @@ func TestNew_RedisPublisher(t *testing.T) {
 		if err != nil {
 			t.Fatalf("New() failed: %v", err)
 		}
+		defer c.Close()
 		if c.redisClient != fake {
 			t.Errorf("redisClient = %T, want the WithRedisPublisher publisher", c.redisClient)
 		}
