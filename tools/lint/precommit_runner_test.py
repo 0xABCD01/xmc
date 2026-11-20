@@ -586,12 +586,12 @@ class LanguageChecksTest(unittest.TestCase):
         self.assertFalse(ctx_missing_fix.failed)
         missing_fix_exec.assert_not_called()
 
-
-
     def test_check_codeowners_alignment(self):
         ctx = gates.RunContext(mode="fix")
         with (
-            mock.patch.object(gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")) as exec_mock,
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+            ) as exec_mock,
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
             runner.check_codeowners_alignment(ctx)
@@ -601,7 +601,9 @@ class LanguageChecksTest(unittest.TestCase):
     def test_check_profile_lock(self):
         ctx_fix = gates.RunContext(mode="fix")
         with (
-            mock.patch.object(gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")) as exec_mock,
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 0, "", "")
+            ) as exec_mock,
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
             runner.check_profile_lock(ctx_fix)
@@ -611,13 +613,16 @@ class LanguageChecksTest(unittest.TestCase):
 
         ctx_chk = gates.RunContext(mode="check")
         with (
-            mock.patch.object(gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")) as exec_mock_fail,
+            mock.patch.object(
+                gates, "exec_cmd", return_value=subprocess.CompletedProcess([], 1, "", "")
+            ) as exec_mock_fail,
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
             runner.check_profile_lock(ctx_chk)
         self.assertTrue(ctx_chk.failed)
         exec_mock_fail.assert_called_once()
         self.assertNotIn("--staged", exec_mock_fail.call_args.args[0])
+
 
 class OrchestrationAndMainTest(unittest.TestCase):
     @contextlib.contextmanager

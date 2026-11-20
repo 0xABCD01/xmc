@@ -400,11 +400,11 @@ def _autostage(subcommand: str, state_path: str) -> bool:
     return gates.exec_cmd(cmd, quiet_out=True).returncode == 0
 
 
-
 def check_codeowners_alignment(ctx: gates.RunContext) -> None:
     print("--> Checking CODEOWNERS Alignment...")
     if gates.exec_cmd([sys.executable, "tools/lint/check_codeowners_alignment.py"]).returncode != 0:
         ctx.fail("CODEOWNERS alignment check failed (see JSON error above).")
+
 
 def check_profile_lock(ctx: gates.RunContext) -> None:
     print("--> Checking Component Profile Release Locks...")
