@@ -147,7 +147,7 @@ experiment's largest work unit ID. ESS checks, in order
 ESS then writes all work units in one transaction
 ([`internal/workunit/batchcreateworkunits.go`](../../internal/workunit/batchcreateworkunits.go)): it
 checks the caller against the `hpo` component again, reads the experiment once, allocates the IDs with a
-single next-ID read, inserts each work unit, and updates the experiment's denormalized
+single next-ID read, inserts the work units in one write, and updates the experiment's denormalized
 status and resources once. After the commit it records one creation operation per work unit and
 enqueues each creation task. A work unit whose operation or task cannot be created gets the `FATAL`
 status message `CreateWorkUnit` uses on enqueue failure (`CreateWorkUnit` does not mark `FATAL` if

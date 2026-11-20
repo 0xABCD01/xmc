@@ -40,10 +40,9 @@ var ErrBatchCreateRequiresStudy = status.Error(codes.Unimplemented, "BatchCreate
 // BatchCreateWorkUnits creates wus as new work units of the STUDY experiment xid in a single
 // transaction, after checking within it that creator is the study controller (see
 // AuthorizeStudyController). The work units get the contiguous IDs that follow the experiment's
-// largest work unit ID, in order, and the Experiment row is read and written once; each work unit
-// is inserted with its own write. It returns the created work units in the order of wus; wus is
-// not modified. An empty wus or a nil work unit is rejected with grpcerr.ErrInvalidArgument before
-// any transaction starts.
+// largest work unit ID, in order, and the Experiment row is read and written once. It returns the
+// created work units in the order of wus; wus is not modified. An empty wus or a nil work unit is
+// rejected with grpcerr.ErrInvalidArgument before any transaction starts.
 func BatchCreateWorkUnits(ctx context.Context, txRunner storage.TransactionRunner, xid int64, creator string, wus []*essmsgpb.WorkUnit) ([]*essmsgpb.WorkUnit, error) {
 	if err := requireBatchWorkUnits(wus); err != nil {
 		return nil, err
@@ -92,10 +91,10 @@ func batchCreateWorkUnitsInTx(ctx context.Context, tx *storage.Transaction, xid 
 		return nil, fmt.Errorf("failed to fetch next work unit ID: %w", err)
 	}
 	created := newBatchWorkUnits(wus, xid, firstWID, now)
+	if err := tx.WorkUnits.InsertWorkUnits(ctx, created); err != nil {
+		return nil, fmt.Errorf("failed to insert work units: %w", err)
+	}
 	for i, wu := range created {
-		if err := tx.WorkUnits.InsertWorkUnit(ctx, wu); err != nil {
-			return nil, fmt.Errorf("failed to insert work unit %s: %w", wu.GetName(), err)
-		}
 		if err := RecordExecutionHistory(ctx, tx, xid, firstWID+int64(i), initialExecutionID, wu.GetExecutable(), nil, wu.GetCurrentWorkUnitExecution()); err != nil {
 			return nil, err
 		}

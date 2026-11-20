@@ -77,8 +77,7 @@ func TestBatchCreateWorkUnits_AssignsContiguousIDsInOneTransaction(t *testing.T)
 	if diff := cmp.Diff([]string{"a", "b", "c"}, gotTrials); diff != "" {
 		t.Errorf("created work unit notes mismatch (-want +got):\n%s", diff)
 	}
-	// The mock records the last inserted work unit.
-	if diff := cmp.Diff(created[2], st.InsertedWorkUnit, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(created, st.InsertedWorkUnits, protocmp.Transform()); diff != "" {
 		t.Errorf("inserted work units mismatch (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff(originals, wus, protocmp.Transform()); diff != "" {
@@ -141,7 +140,7 @@ func TestBatchCreateWorkUnits_Errors(t *testing.T) {
 		{name: "experiment read failure", mutate: func(st *storage.MockStorage) { st.FetchExperimentErr = errStorage }, wantErr: errStorage},
 		{name: "missing experiment", mutate: func(st *storage.MockStorage) { st.Experiment = nil }, wantCode: codes.Unknown},
 		{name: "ID allocation failure", mutate: func(st *storage.MockStorage) { st.FetchNextWorkUnitIDErr = errStorage }, wantErr: errStorage},
-		{name: "insert failure", mutate: func(st *storage.MockStorage) { st.InsertWorkUnitErr = errStorage }, wantErr: errStorage},
+		{name: "insert failure", mutate: func(st *storage.MockStorage) { st.InsertWorkUnitsErr = errStorage }, wantErr: errStorage},
 		{name: "history failure", mutate: func(st *storage.MockStorage) {
 			st.StatusHistoryTxRepository = &storage.MockStatusHistoryTxRepository{SaveErr: errStorage}
 		}, wantErr: errStorage},
