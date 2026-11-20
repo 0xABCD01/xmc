@@ -563,7 +563,7 @@ func checkSystemMessage(t *testing.T, st *storage.MockStorage, wid int64, wantEx
 }
 
 // fetchRecordedOperation parses opName and fetches the corresponding operation from st.
-func fetchRecordedOperation(ctx context.Context, t *testing.T, st storage.Storage, opName string) (int64, int64, *lropb.Operation) {
+func fetchRecordedOperation(ctx context.Context, t *testing.T, st storage.Storage, opName string) (int64, *lropb.Operation) {
 	t.Helper()
 	xid, wid, oid, err := validator.ValidateOperationName(opName)
 	if err != nil {
@@ -573,7 +573,41 @@ func fetchRecordedOperation(ctx context.Context, t *testing.T, st storage.Storag
 	if err != nil {
 		t.Fatalf("FetchWorkUnitOperation(%q) failed: %v", opName, err)
 	}
-	return xid, wid, op
+	return wid, op
+}
+
+// checkPartialEnqueueOperations verifies that after a 2-task batch where tasks[0] succeeded and
+// tasks[1] failed to enqueue, only tasks[1] closed its operation and recorded wantFailSeverity.
+func checkPartialEnqueueOperations(ctx context.Context, t *testing.T, st storage.Storage, xid int64, tasks []tq.EnqueuedTask, action string, wantFailSeverity essmsgpb.StructuredMessage_Severity) {
+	t.Helper()
+	okWID, okOp := fetchRecordedOperation(ctx, t, st, tasks[0].OperationName)
+	if okOp.GetDone() || okOp.GetError() != nil {
+		t.Errorf("succeeded %s operation %s = (done=%v, error=%v), want pending with nil error", action, okOp.GetName(), okOp.GetDone(), okOp.GetError())
+	}
+	okExec, err := st.FetchCurrentWorkUnitExecution(ctx, xid, okWID)
+	if err != nil {
+		t.Fatalf("FetchCurrentWorkUnitExecution(%d) failed: %v", okWID, err)
+	}
+	if sev := okExec.GetStatus().GetSystemMessage().GetSeverity(); sev == wantFailSeverity {
+		t.Errorf("succeeded work unit %d execution system message severity = %v, want non-%v", okWID, sev, wantFailSeverity)
+	}
+	failWID, failOp := fetchRecordedOperation(ctx, t, st, tasks[1].OperationName)
+	if !failOp.GetDone() || codes.Code(failOp.GetError().GetCode()) != codes.Internal {
+		t.Errorf("failed %s operation %s = (done=%v, code=%v), want (done=true, code=%v)", action, failOp.GetName(), failOp.GetDone(), codes.Code(failOp.GetError().GetCode()), codes.Internal)
+	}
+	failExec, err := st.FetchCurrentWorkUnitExecution(ctx, xid, failWID)
+	if err != nil {
+		t.Fatalf("FetchCurrentWorkUnitExecution(%d) failed: %v", failWID, err)
+	}
+	wantMsg := &essmsgpb.StructuredMessage{
+		Source:         essmsgpb.StructuredMessage_XMANAGER_BACKEND,
+		Severity:       wantFailSeverity,
+		UserFacingText: fmt.Sprintf("Failed to %s work unit. Please try again.", action),
+		Parent:         validator.ConstructWorkUnitName(xid, failWID),
+	}
+	if diff := cmp.Diff(wantMsg, failExec.GetStatus().GetSystemMessage(), protocmp.Transform(), protocmp.IgnoreFields(&essmsgpb.StructuredMessage{}, "create_time")); diff != "" {
+		t.Errorf("failed work unit %d system message mismatch (-want +got):\n%s", failWID, diff)
+	}
 }
 
 func TestPropagateIAPJWT(t *testing.T) {
