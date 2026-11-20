@@ -463,6 +463,14 @@ func TestStopOperationOnError(t *testing.T) {
 			wantUpdateWorkUnitOperation: false,
 		},
 		{
+			name:                        "error_without_status",
+			op:                          &lropb.Operation{Name: opName},
+			err:                         errors.New("failed to add message to redis"),
+			wantUpdateWorkUnitOperation: true,
+			wantDone:                    true,
+			wantCode:                    codes.Internal,
+		},
+		{
 			name:                        "update_op_error",
 			op:                          &lropb.Operation{Name: opName},
 			err:                         grpcerr.ErrInternal,
@@ -503,6 +511,46 @@ func TestStopOperationOnError(t *testing.T) {
 				t.Errorf("stopOperationOnError() updated operation with wrong update mask (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// checkOperationStopped checks that st recorded the work unit operation for xid and wid as done
+// with an INTERNAL error, which is how stopOperationOnError closes an operation after a failure.
+func checkOperationStopped(t *testing.T, st *storage.MockStorage, xid, wid int64) {
+	t.Helper()
+	got := st.GotOperationUpdate
+	if got == nil {
+		t.Fatalf("UpdateWorkUnitOperation() was not called, want the operation of experiments/%d/workUnits/%d stopped", xid, wid)
+	}
+	if got.XID != xid || got.WID != wid {
+		t.Errorf("stopped operation of XID %d, WID %d, want XID %d, WID %d", got.XID, got.WID, xid, wid)
+	}
+	if !got.Operation.GetDone() {
+		t.Error("stopped operation done = false, want true")
+	}
+	if code := codes.Code(got.Operation.GetError().GetCode()); code != codes.Internal {
+		t.Errorf("stopped operation error code = %v, want %v", code, codes.Internal)
+	}
+	wantMask := &fmpb.FieldMask{Paths: []string{"done", "error"}}
+	if diff := cmp.Diff(wantMask, got.UpdateMask, protocmp.Transform()); diff != "" {
+		t.Errorf("stopped operation update mask mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// checkSystemMessage checks that the last execution st recorded for wid is wantExecution and
+// carries the want system message. The message's create time is ignored.
+func checkSystemMessage(t *testing.T, st *storage.MockStorage, wid int64, wantExecution string, want *essmsgpb.StructuredMessage) {
+	t.Helper()
+	got, ok := st.UpdatedWorkUnitExecutions[wid]
+	if !ok {
+		t.Fatalf("no work unit execution was written for WID %d, want %s with system message %v", wid, wantExecution, want)
+	}
+	if got.GetName() != wantExecution {
+		t.Errorf("written work unit execution = %s, want %s", got.GetName(), wantExecution)
+	}
+	opts := []cmp.Option{protocmp.Transform(), protocmp.IgnoreFields(&essmsgpb.StructuredMessage{}, "create_time")}
+	if diff := cmp.Diff(want, got.GetStatus().GetSystemMessage(), opts...); diff != "" {
+		t.Errorf("written system message mismatch (-want +got):\n%s", diff)
 	}
 }
 

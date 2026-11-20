@@ -19,6 +19,12 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	lropb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"github.com/google/go-cmp/cmp"
+	"google.golang.org/protobuf/testing/protocmp"
+	essmsgpb "xmanager_cloud/api/protos/experiment"
+	"xmanager_cloud/internal/validator"
 )
 
 func TestMockStorage_RunInSerializableTransaction(t *testing.T) {
@@ -71,4 +77,91 @@ func TestMockStorage_RunInSerializableTransaction(t *testing.T) {
 			t.Errorf("CommitTime = %v, want zero time on error", got)
 		}
 	})
+}
+
+func TestMockStorage_AddWorkUnitOperation(t *testing.T) {
+	ctx := context.Background()
+	metadata := &essmsgpb.OperationMetadata{Target: "experiments/123/workUnits/456", ActionType: essmsgpb.OperationMetadata_RESTART}
+
+	t.Run("defaults to a pending operation named after xid and wid", func(t *testing.T) {
+		m := &MockStorage{}
+		op, err := m.AddWorkUnitOperation(ctx, 123, 456, metadata)
+		if err != nil {
+			t.Fatalf("AddWorkUnitOperation() error = %v", err)
+		}
+		xid, wid, _, err := validator.ValidateOperationName(op.GetName())
+		if err != nil || xid != 123 || wid != 456 {
+			t.Errorf("AddWorkUnitOperation() name = %q (err %v), want an operation of XID 123, WID 456", op.GetName(), err)
+		}
+		if op.GetDone() {
+			t.Error("AddWorkUnitOperation() done = true, want false")
+		}
+		gotMetadata := &essmsgpb.OperationMetadata{}
+		if err := op.GetMetadata().UnmarshalTo(gotMetadata); err != nil {
+			t.Fatalf("AddWorkUnitOperation() metadata unmarshal error = %v", err)
+		}
+		if diff := cmp.Diff(metadata, gotMetadata, protocmp.Transform()); diff != "" {
+			t.Errorf("AddWorkUnitOperation() metadata mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("returns LROOp when set", func(t *testing.T) {
+		want := &lropb.Operation{Name: "experiments/1/workUnits/2/operations/fixed"}
+		m := &MockStorage{LROOp: want}
+		got, err := m.AddWorkUnitOperation(ctx, 123, 456, metadata)
+		if err != nil || got != want {
+			t.Errorf("AddWorkUnitOperation() = %v, %v, want %v, nil", got, err, want)
+		}
+	})
+
+	t.Run("returns AddWorkUnitOperationErr when set", func(t *testing.T) {
+		wantErr := errors.New("add failed")
+		m := &MockStorage{AddWorkUnitOperationErr: wantErr, LROOp: &lropb.Operation{}}
+		got, err := m.AddWorkUnitOperation(ctx, 123, 456, metadata)
+		if !errors.Is(err, wantErr) || got != nil {
+			t.Errorf("AddWorkUnitOperation() = %v, %v, want nil, %v", got, err, wantErr)
+		}
+	})
+}
+
+func TestMockStorage_FetchUpdatingWorkUnits(t *testing.T) {
+	ctx := context.Background()
+	stored := &essmsgpb.WorkUnit{
+		Name:                     "experiments/123/workUnits/456",
+		CurrentWorkUnitExecution: &essmsgpb.WorkUnitExecution{Name: "experiments/123/workUnits/456/executions/1"},
+	}
+	written := &essmsgpb.WorkUnitExecution{Name: "experiments/123/workUnits/456/executions/2"}
+
+	testCases := []struct {
+		name          string
+		storage       *MockStorage
+		wantExecution string
+	}{
+		{
+			name:          "configured work unit",
+			storage:       &MockStorage{WorkUnit: stored},
+			wantExecution: "experiments/123/workUnits/456/executions/1",
+		},
+		{
+			name:          "inserted work unit when none is configured",
+			storage:       &MockStorage{InsertedWorkUnit: stored},
+			wantExecution: "experiments/123/workUnits/456/executions/1",
+		},
+		{
+			name:          "reads the last written execution",
+			storage:       &MockStorage{WorkUnit: stored, UpdatedWorkUnitExecutions: map[int64]*essmsgpb.WorkUnitExecution{456: written}},
+			wantExecution: "experiments/123/workUnits/456/executions/2",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.storage.FetchUpdatingWorkUnits(ctx, 123, []int64{456})
+			if err != nil {
+				t.Fatalf("FetchUpdatingWorkUnits() error = %v", err)
+			}
+			if name := got[456].GetCurrentWorkUnitExecution().GetName(); name != tc.wantExecution {
+				t.Errorf("FetchUpdatingWorkUnits() current execution = %q, want %q", name, tc.wantExecution)
+			}
+		})
+	}
 }
