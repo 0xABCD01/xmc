@@ -1022,6 +1022,7 @@ func TestResolveExecutionCluster(t *testing.T) {
 		{name: "not queued in Kueue uses manager", jobSet: newJobSet(false, false), want: manager, wantOK: true},
 		{name: "queued workload not created yet skips", jobSet: newJobSet(true, true), want: unresolved},
 		{name: "workload not admitted and suspended skips", jobSet: newJobSet(true, true), objs: []client.Object{workload(nil, false)}, want: unresolved},
+		{name: "workload admitted but not yet dispatched skips", jobSet: newJobSet(true, true), objs: []client.Object{workload(nil, true)}, want: unresolved},
 		{name: "admitted locally uses manager", jobSet: newJobSet(true, false), objs: []client.Object{workload(nil, true)}, want: manager, wantOK: true},
 		{name: "admitted with empty cluster name uses manager", jobSet: newJobSet(true, false), objs: []client.Object{workload(&empty, true)}, want: manager, wantOK: true},
 		{name: "MultiKueueCluster not found skips", jobSet: newJobSet(true, false), objs: []client.Object{workload(&worker, true)}, want: unresolved},

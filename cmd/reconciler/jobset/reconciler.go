@@ -494,12 +494,14 @@ func (r *Reconciler) managerClusterInfo() *spb.ClusterInfo {
 
 // awaitingAdmission reports whether a JobSet without an assigned MultiKueue
 // cluster may still get one: it is queued but its Workload does not exist yet,
-// or its Workload is not admitted while the JobSet is suspended.
+// or it is still suspended. Kueue reserves quota (status.admission) before
+// MultiKueue picks a worker (status.clusterName) and unsuspends the JobSet, so
+// an admitted Workload alone does not mean the JobSet runs on the manager.
 func awaitingAdmission(jobSet *v1alpha2.JobSet, wl *v1beta1.Workload) bool {
 	if wl == nil {
 		return jobSet.Labels["kueue.x-k8s.io/queue-name"] != ""
 	}
-	return wl.Status.Admission == nil && jobSet.Spec.Suspend != nil && *jobSet.Spec.Suspend
+	return jobSet.Spec.Suspend != nil && *jobSet.Spec.Suspend
 }
 
 func findJobSetWorkload(workloads []v1beta1.Workload, jobSetName string) *v1beta1.Workload {
