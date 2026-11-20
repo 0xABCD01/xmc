@@ -67,6 +67,56 @@ def _group_added_version_names(added_paths: Sequence[str]) -> dict[int, set[str]
     return by_version
 
 
+def _build_violation(
+    migration_dir: str,
+    path: str,
+    version: int,
+    base_max: int,
+    reason: str,
+) -> dict[str, Any]:
+    """Construct a structured migration-ordering violation entry."""
+    return {
+        "dir": migration_dir,
+        "path": path,
+        "version": version,
+        "base_max": base_max,
+        "reason": reason,
+    }
+
+
+def _check_added_path(
+    migration_dir: str,
+    path: str,
+    base_max: int,
+    has_base_versions: bool,
+    added_by_version: dict[int, set[str]],
+) -> dict[str, Any] | None:
+    """Return a violation dict if an added path conflicts or is out of order."""
+    version = parse_migration_version(path)
+    if version is None:
+        return None
+    bases = added_by_version.get(version, set())
+    if len(bases) > 1:
+        return _build_violation(
+            migration_dir,
+            path,
+            version,
+            base_max,
+            f"Duplicate migration version {version} detected with different names: "
+            f"{', '.join(sorted(bases))}.",
+        )
+    if has_base_versions and version <= base_max:
+        return _build_violation(
+            migration_dir,
+            path,
+            version,
+            base_max,
+            f"Added migration version {version} must be strictly greater than "
+            f"max version {base_max} on base ref.",
+        )
+    return None
+
+
 def find_out_of_order_migrations(
     migration_dir: str,
     base_paths: Sequence[str],
@@ -93,41 +143,38 @@ def find_out_of_order_migrations(
     base_max = max(base_versions, default=0)
     added_paths = sorted(set(current_paths) - set(base_paths))
     added_by_version = _group_added_version_names(added_paths)
+    has_base = bool(base_versions)
 
-    violations: list[dict[str, Any]] = []
-    for path in added_paths:
-        version = parse_migration_version(path)
-        if version is None:
-            continue
-        bases = added_by_version.get(version, set())
-        if len(bases) > 1:
-            violations.append(
-                {
-                    "dir": migration_dir,
-                    "path": path,
-                    "version": version,
-                    "base_max": base_max,
-                    "reason": (
-                        f"Duplicate migration version {version} detected with different names: "
-                        f"{', '.join(sorted(bases))}."
-                    ),
-                }
+    violations = [
+        violation
+        for path in added_paths
+        if (
+            violation := _check_added_path(
+                migration_dir, path, base_max, has_base, added_by_version
             )
-            continue
-        if base_versions and version <= base_max:
-            violations.append(
-                {
-                    "dir": migration_dir,
-                    "path": path,
-                    "version": version,
-                    "base_max": base_max,
-                    "reason": (
-                        f"Added migration version {version} must be strictly greater than "
-                        f"max version {base_max} on base ref."
-                    ),
-                }
-            )
+        )
+        is not None
+    ]
     return base_max, violations
+
+
+def _run_git(
+    repo_root: Path,
+    git_args: Sequence[str],
+    *,
+    handled_instruction: str,
+) -> str:
+    """Execute a git subcommand and return stdout without polluting stderr on error."""
+    proc = run_command(
+        ["git", *git_args],
+        cwd=repo_root,
+        capture_output=True,
+        log_cmd=False,
+        log_on_error=False,
+        errors="replace",
+        handled_instruction=handled_instruction,
+    )
+    return proc.stdout
 
 
 def _validate_repo_and_base(
@@ -146,6 +193,11 @@ def _validate_repo_and_base(
             f"Invalid git repository root: {repo_root}",
             "Pass --repo-root pointing to the top-level git working tree.",
         )
+    if any(not d for d in migration_dirs):
+        raise HandledError(
+            "Migration directory path cannot be empty or '/'.",
+            "Pass non-empty repository-relative paths to --dir.",
+        )
     missing_dirs = [d for d in migration_dirs if not (repo_root / d).is_dir()]
     if missing_dirs:
         raise HandledError(
@@ -153,12 +205,9 @@ def _validate_repo_and_base(
             "Verify --repo-root and --dir paths point to existing migration directories.",
             details={"missing_dirs": missing_dirs},
         )
-    run_command(
-        ["git", "rev-parse", "--verify", f"{base_ref}^{{commit}}"],
-        cwd=repo_root,
-        capture_output=True,
-        log_cmd=False,
-        errors="replace",
+    _run_git(
+        repo_root,
+        ["rev-parse", "--verify", f"{base_ref}^{{commit}}"],
         handled_instruction=(
             f"Base ref '{base_ref}' could not be resolved. Run 'git fetch origin main' "
             "or pass a valid --base-ref."
@@ -168,9 +217,9 @@ def _validate_repo_and_base(
 
 def _list_base_paths(repo_root: Path, base_ref: str, migration_dir: str) -> list[str]:
     """List repository-relative paths under ``migration_dir`` at ``base_ref``."""
-    proc = run_command(
+    stdout = _run_git(
+        repo_root,
         [
-            "git",
             "-c",
             "core.quotePath=false",
             "ls-tree",
@@ -181,26 +230,19 @@ def _list_base_paths(repo_root: Path, base_ref: str, migration_dir: str) -> list
             "--",
             migration_dir,
         ],
-        cwd=repo_root,
-        capture_output=True,
-        log_cmd=False,
-        errors="replace",
         handled_instruction=f"Failed to list '{migration_dir}' at base ref '{base_ref}'.",
     )
-    return [entry for entry in proc.stdout.split("\0") if entry]
+    return [entry for entry in stdout.split("\0") if entry]
 
 
 def _list_current_paths(repo_root: Path, migration_dir: str) -> list[str]:
     """List git-indexed repository-relative paths under ``migration_dir``."""
-    proc = run_command(
-        ["git", "-c", "core.quotePath=false", "ls-files", "-z", "--", migration_dir],
-        cwd=repo_root,
-        capture_output=True,
-        log_cmd=False,
-        errors="replace",
+    stdout = _run_git(
+        repo_root,
+        ["-c", "core.quotePath=false", "ls-files", "-z", "--", migration_dir],
         handled_instruction=f"Failed to list indexed files under '{migration_dir}'.",
     )
-    return [entry for entry in proc.stdout.split("\0") if entry]
+    return [entry for entry in stdout.split("\0") if entry]
 
 
 def check_migration_order(args: argparse.Namespace) -> dict[str, Any]:

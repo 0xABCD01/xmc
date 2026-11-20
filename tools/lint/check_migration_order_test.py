@@ -191,13 +191,45 @@ class CheckMigrationOrderIntegrationTest(unittest.TestCase):
                 ),
             ]
             args = argparse.Namespace(repo_root=str(root), base_ref="origin/main", dirs=None)
-            with mock.patch.object(cli, "run_command", side_effect=responses):
+            with mock.patch.object(cli, "run_command", side_effect=responses) as run_mock:
                 result = cli.check_migration_order(args)
 
         self.assertEqual(result["violations"], 0)
         self.assertEqual(result["base_ref"], "origin/main")
         self.assertEqual(result["checked_dirs"][SPANNER_DIR], {"base_max": 20, "added_files": 1})
         self.assertEqual(result["checked_dirs"][POSTGRES_DIR], {"base_max": 20, "added_files": 1})
+        expected_cmds = [
+            ["git", "rev-parse", "--verify", "origin/main^{commit}"],
+            [
+                "git",
+                "-c",
+                "core.quotePath=false",
+                "ls-tree",
+                "-r",
+                "--name-only",
+                "-z",
+                "origin/main",
+                "--",
+                SPANNER_DIR,
+            ],
+            ["git", "-c", "core.quotePath=false", "ls-files", "-z", "--", SPANNER_DIR],
+            [
+                "git",
+                "-c",
+                "core.quotePath=false",
+                "ls-tree",
+                "-r",
+                "--name-only",
+                "-z",
+                "origin/main",
+                "--",
+                POSTGRES_DIR,
+            ],
+            ["git", "-c", "core.quotePath=false", "ls-files", "-z", "--", POSTGRES_DIR],
+        ]
+        self.assertEqual([call.args[0] for call in run_mock.call_args_list], expected_cmds)
+        for call in run_mock.call_args_list:
+            self.assertFalse(call.kwargs["log_on_error"])
 
     def test_fails_when_one_backend_adds_out_of_order_migration(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -242,6 +274,30 @@ class CheckMigrationOrderIntegrationTest(unittest.TestCase):
                     with self.assertRaises(HandledError) as cm:
                         cli.check_migration_order(args)
                     self.assertIn("Invalid base ref", cm.exception.message)
+
+    def test_fails_on_empty_or_root_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._make_fake_repo(tmpdir)
+            for bad_dir in ("", "/"):
+                with self.subTest(bad_dir=bad_dir):
+                    args = argparse.Namespace(
+                        repo_root=str(root), base_ref="origin/main", dirs=[bad_dir]
+                    )
+                    with self.assertRaises(HandledError) as cm:
+                        cli.check_migration_order(args)
+                    self.assertIn("cannot be empty", cm.exception.message)
+
+    def test_propagates_handled_error_when_base_ref_unresolvable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._make_fake_repo(tmpdir)
+            args = argparse.Namespace(repo_root=str(root), base_ref="origin/missing", dirs=None)
+            err = HandledError("rev-parse failed", "Run 'git fetch origin main'.")
+            with (
+                mock.patch.object(cli, "run_command", side_effect=err),
+                self.assertRaises(HandledError) as cm,
+            ):
+                cli.check_migration_order(args)
+        self.assertEqual(cm.exception, err)
 
     def test_fails_on_invalid_repo_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
