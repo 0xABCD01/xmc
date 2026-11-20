@@ -36,6 +36,7 @@ DEFAULT_MIGRATION_DIRS: tuple[str, ...] = (
 )
 
 _MIGRATION_FILE_RE = re.compile(r"^(\d+)_.*\.sql$")
+_MIGRATION_DIRECTION_RE = re.compile(r"\.(?:up|down)\.sql$")
 
 
 def parse_migration_version(path: str) -> int | None:
@@ -54,12 +55,24 @@ def parse_migration_version(path: str) -> int | None:
     return int(match.group(1))
 
 
+def _group_added_version_names(added_paths: Sequence[str]) -> dict[int, set[str]]:
+    """Group added migration base names (without `.up.sql`/`.down.sql`) by version."""
+    by_version: dict[int, set[str]] = {}
+    for path in added_paths:
+        version = parse_migration_version(path)
+        if version is None:
+            continue
+        base_name = _MIGRATION_DIRECTION_RE.sub("", PurePosixPath(path).name)
+        by_version.setdefault(version, set()).add(base_name)
+    return by_version
+
+
 def find_out_of_order_migrations(
     migration_dir: str,
     base_paths: Sequence[str],
     current_paths: Sequence[str],
 ) -> tuple[int, list[dict[str, Any]]]:
-    """Identify added migrations whose version is ``<=`` the base ref maximum.
+    """Identify added migrations that conflict with or precede the base ref maximum.
 
     Existing numbering gaps on the base ref are tolerated (no contiguity check).
     Modifications to or deletions of existing migration files are ignored.
@@ -79,24 +92,41 @@ def find_out_of_order_migrations(
     ]
     base_max = max(base_versions, default=0)
     added_paths = sorted(set(current_paths) - set(base_paths))
+    added_by_version = _group_added_version_names(added_paths)
 
     violations: list[dict[str, Any]] = []
     for path in added_paths:
         version = parse_migration_version(path)
-        if version is None or version > base_max:
+        if version is None:
             continue
-        violations.append(
-            {
-                "dir": migration_dir,
-                "path": path,
-                "version": version,
-                "base_max": base_max,
-                "reason": (
-                    f"Added migration version {version} must be strictly greater than "
-                    f"max version {base_max} on base ref."
-                ),
-            }
-        )
+        bases = added_by_version.get(version, set())
+        if len(bases) > 1:
+            violations.append(
+                {
+                    "dir": migration_dir,
+                    "path": path,
+                    "version": version,
+                    "base_max": base_max,
+                    "reason": (
+                        f"Duplicate migration version {version} detected with different names: "
+                        f"{', '.join(sorted(bases))}."
+                    ),
+                }
+            )
+            continue
+        if base_versions and version <= base_max:
+            violations.append(
+                {
+                    "dir": migration_dir,
+                    "path": path,
+                    "version": version,
+                    "base_max": base_max,
+                    "reason": (
+                        f"Added migration version {version} must be strictly greater than "
+                        f"max version {base_max} on base ref."
+                    ),
+                }
+            )
     return base_max, violations
 
 
@@ -106,6 +136,11 @@ def _validate_repo_and_base(
     migration_dirs: Sequence[str],
 ) -> None:
     """Validate git repository root, target directories, and base ref."""
+    if not base_ref or base_ref.startswith("-"):
+        raise HandledError(
+            f"Invalid base ref: {base_ref!r}",
+            "Pass a non-empty --base-ref that does not start with a hyphen.",
+        )
     if not repo_root.is_dir() or not (repo_root / ".git").exists():
         raise HandledError(
             f"Invalid git repository root: {repo_root}",

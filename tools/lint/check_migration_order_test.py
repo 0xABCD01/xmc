@@ -128,6 +128,33 @@ class FindOutOfOrderMigrationsTest(unittest.TestCase):
         self.assertEqual(base_max, 0)
         self.assertEqual(violations, [])
 
+    def test_handles_empty_base_directory_with_zero_version(self) -> None:
+        base_max, violations = cli.find_out_of_order_migrations(
+            SPANNER_DIR,
+            [],
+            [f"{SPANNER_DIR}/000_zero.up.sql"],
+        )
+        self.assertEqual(base_max, 0)
+        self.assertEqual(violations, [])
+
+    def test_rejects_duplicate_versions_with_different_names(self) -> None:
+        base = [f"{SPANNER_DIR}/013_baseline.up.sql"]
+        current = [
+            *base,
+            f"{SPANNER_DIR}/014_foo.up.sql",
+            f"{SPANNER_DIR}/014_bar.up.sql",
+        ]
+        base_max, violations = cli.find_out_of_order_migrations(SPANNER_DIR, base, current)
+        self.assertEqual(base_max, 13)
+        self.assertEqual(
+            [(v["path"], v["version"]) for v in violations],
+            [
+                (f"{SPANNER_DIR}/014_bar.up.sql", 14),
+                (f"{SPANNER_DIR}/014_foo.up.sql", 14),
+            ],
+        )
+        self.assertIn("Duplicate migration version 14", violations[0]["reason"])
+
 
 class CheckMigrationOrderIntegrationTest(unittest.TestCase):
     """Tests for git integration, error paths, and CLI entrypoint."""
@@ -205,6 +232,16 @@ class CheckMigrationOrderIntegrationTest(unittest.TestCase):
         self.assertEqual(len(cm.exception.details["violations"]), 1)
         self.assertEqual(cm.exception.details["violations"][0]["dir"], POSTGRES_DIR)
         self.assertEqual(cm.exception.details["violations"][0]["version"], 19)
+
+    def test_fails_on_invalid_base_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._make_fake_repo(tmpdir)
+            for bad_ref in ("", "-f", "--help"):
+                with self.subTest(base_ref=bad_ref):
+                    args = argparse.Namespace(repo_root=str(root), base_ref=bad_ref, dirs=None)
+                    with self.assertRaises(HandledError) as cm:
+                        cli.check_migration_order(args)
+                    self.assertIn("Invalid base ref", cm.exception.message)
 
     def test_fails_on_invalid_repo_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
