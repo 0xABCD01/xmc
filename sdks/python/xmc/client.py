@@ -24,7 +24,6 @@ import urllib.request
 from collections.abc import Mapping
 from typing import Any
 
-from xmc._version import __version__
 from xmc.dist_harvest import (
     harvest_client_metadata,
 )
@@ -123,7 +122,7 @@ class Client:
         self._headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": f"xmc-python-sdk/{__version__}",
+            "User-Agent": "xmc-python-sdk/0.1.0",
         }
         if self._job_name:
             self._headers["X-Job-Name"] = self._job_name

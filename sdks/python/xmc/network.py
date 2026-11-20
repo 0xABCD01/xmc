@@ -25,7 +25,6 @@ import urllib.parse
 from collections.abc import Mapping
 from typing import Any
 
-from xmc._version import __version__
 from xmc.dist_harvest import harvest_client_metadata
 
 
@@ -104,7 +103,7 @@ class HTTPClient:
         self._headers: dict[str, str] = {
             "Connection": "keep-alive",
             "Content-Type": "application/json",
-            "User-Agent": f"xmc-python-network/{__version__}",
+            "User-Agent": "xmc-python-network/0.1.0",
         }
         if self._job_name:
             self._headers["X-Job-Name"] = self._job_name

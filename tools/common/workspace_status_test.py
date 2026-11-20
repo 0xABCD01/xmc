@@ -28,7 +28,8 @@ from tools.common import workspace_status
 class WorkspaceStatusTest(unittest.TestCase):
     def test_read_version_reads_repo_version_file(self) -> None:
         version = workspace_status.read_version()
-        self.assertTrue(version)
+        self.assertRegex(version, r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+        self.assertLessEqual(len(f"xmc-{version}"), 63)
         self.assertNotEqual(version, workspace_status.FALLBACK_VERSION)
 
     def test_read_version_strips_surrounding_newlines(self) -> None:

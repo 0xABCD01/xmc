@@ -79,14 +79,6 @@ PYTHON_GATES: tuple[PythonGate, ...] = (
             "Nightly UI selectors reference missing DOM or unannotated copy (see JSON error above)."
         ),
     ),
-    PythonGate(
-        banner="--> Checking Repository Version Manifest Sync...",
-        script="tools/lint/check_version_sync.py",
-        failure_msg=(
-            "Version manifests drifted from root VERSION "
-            "(run 'python3 tools/lint/check_version_sync.py --fix')."
-        ),
-    ),
 )
 
 

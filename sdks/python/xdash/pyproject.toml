@@ -18,7 +18,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xdash"
-version = "1.0.0"
+version = "0.1.0"
 description = "XMC Python SDK and CLI for Metrics Dashboards & Charts"
 requires-python = ">=3.11"
 license = "Apache-2.0"
