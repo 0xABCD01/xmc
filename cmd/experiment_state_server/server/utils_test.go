@@ -467,6 +467,14 @@ func TestStopOperationOnError(t *testing.T) {
 			wantUpdateWorkUnitOperation: false,
 		},
 		{
+			// The generated GetName getter is nil-safe, so a nil operation fails name validation
+			// instead of panicking.
+			name:                        "nil_operation",
+			op:                          nil,
+			err:                         grpcerr.ErrInternal,
+			wantUpdateWorkUnitOperation: false,
+		},
+		{
 			name:                        "error_without_status",
 			op:                          &lropb.Operation{Name: opName},
 			err:                         errors.New("failed to add message to redis"),
