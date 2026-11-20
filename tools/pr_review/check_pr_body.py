@@ -137,10 +137,11 @@ def collect_bullets(lines: list[tuple[int, str]]) -> list[_Bullet]:
             bullets.append(current)
         elif match:
             current = None
-        elif current is not None:
-            current.parts.append(line)
         elif line.strip() == NONE_BULLET:
             bullets.append(_Bullet(line=number, parts=[NONE_BULLET]))
+            current = None
+        elif current is not None:
+            current.parts.append(line)
     return bullets
 
 

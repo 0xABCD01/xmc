@@ -153,6 +153,10 @@ class CheckBodyTest(unittest.TestCase):
         text = _body(f"### Details\n{_VALID_ASSUMPTION}\n- bad")
         self.assertEqual([v["text"] for v in _violations(text)], ["bad"])
 
+    def test_none_line_without_blank_line_does_not_extend_previous_bullet(self) -> None:
+        text = _body(f"- incomplete — missing impact\n{cli.NONE_BULLET}")
+        self.assertEqual([v["text"] for v in _violations(text)], ["incomplete — missing impact"])
+
 
 class CliTest(unittest.TestCase):
     """CLI input handling, JSON output and exit codes."""
