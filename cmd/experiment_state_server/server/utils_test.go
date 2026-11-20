@@ -48,6 +48,7 @@ import (
 	"xmanager_cloud/internal/storage/spanner/emulator"
 	tq "xmanager_cloud/internal/task_queue"
 	"xmanager_cloud/internal/task_queue_redis/redisclient"
+	"xmanager_cloud/internal/validator"
 )
 
 var testExecutable = &essmsgpb.Executable{
@@ -559,6 +560,20 @@ func checkSystemMessage(t *testing.T, st *storage.MockStorage, wid int64, wantEx
 	if diff := cmp.Diff(want, got.GetStatus().GetSystemMessage(), opts...); diff != "" {
 		t.Errorf("written system message mismatch (-want +got):\n%s", diff)
 	}
+}
+
+// fetchRecordedOperation parses opName and fetches the corresponding operation from st.
+func fetchRecordedOperation(ctx context.Context, t *testing.T, st storage.Storage, opName string) (int64, int64, *lropb.Operation) {
+	t.Helper()
+	xid, wid, oid, err := validator.ValidateOperationName(opName)
+	if err != nil {
+		t.Fatalf("ValidateOperationName(%q) failed: %v", opName, err)
+	}
+	op, err := st.FetchWorkUnitOperation(ctx, xid, wid, oid)
+	if err != nil {
+		t.Fatalf("FetchWorkUnitOperation(%q) failed: %v", opName, err)
+	}
+	return xid, wid, op
 }
 
 func TestPropagateIAPJWT(t *testing.T) {

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"xmanager_cloud/internal/auth"
@@ -442,6 +443,37 @@ func TestBatchStopWorkUnits_PartialFailure(t *testing.T) {
 	states[wu2Exec.GetStatus().GetState()]++
 	if states[msgpb.WorkUnitStatus_INITIALIZING] != 1 || states[msgpb.WorkUnitStatus_STOPPING] != 1 {
 		t.Errorf("Work unit execution states got %v and %v, want one INITIALIZING and one STOPPING", wu1Exec.GetStatus().GetState(), wu2Exec.GetStatus().GetState())
+	}
+
+	// Verify only the failed enqueue closed its operation and recorded an ERROR status message.
+	_, okWID, okOp := fetchRecordedOperation(ctx, t, server.WorkUnitHandler.storage, taskQueueClient.EnqueuedTasks[0].OperationName)
+	if okOp.GetDone() || okOp.GetError() != nil {
+		t.Errorf("succeeded stop operation %s = (done=%v, error=%v), want pending with nil error", okOp.GetName(), okOp.GetDone(), okOp.GetError())
+	}
+	okExec, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, okWID)
+	if err != nil {
+		t.Fatalf("FetchCurrentWorkUnitExecution(%d) failed: %v", okWID, err)
+	}
+	if sev := okExec.GetStatus().GetSystemMessage().GetSeverity(); sev == msgpb.StructuredMessage_ERROR {
+		t.Errorf("succeeded work unit %d execution system message severity = %v, want non-ERROR", okWID, sev)
+	}
+
+	_, failWID, failOp := fetchRecordedOperation(ctx, t, server.WorkUnitHandler.storage, taskQueueClient.EnqueuedTasks[1].OperationName)
+	if !failOp.GetDone() || codes.Code(failOp.GetError().GetCode()) != codes.Internal {
+		t.Errorf("failed stop operation %s = (done=%v, code=%v), want (done=true, code=%v)", failOp.GetName(), failOp.GetDone(), codes.Code(failOp.GetError().GetCode()), codes.Internal)
+	}
+	failExec, err := server.WorkUnitHandler.storage.FetchCurrentWorkUnitExecution(ctx, xid, failWID)
+	if err != nil {
+		t.Fatalf("FetchCurrentWorkUnitExecution(%d) failed: %v", failWID, err)
+	}
+	wantMsg := &msgpb.StructuredMessage{
+		Source:         msgpb.StructuredMessage_XMANAGER_BACKEND,
+		Severity:       msgpb.StructuredMessage_ERROR,
+		UserFacingText: "Failed to stop work unit. Please try again.",
+		Parent:         validator.ConstructWorkUnitName(xid, failWID),
+	}
+	if diff := cmp.Diff(wantMsg, failExec.GetStatus().GetSystemMessage(), protocmp.Transform(), protocmp.IgnoreFields(&msgpb.StructuredMessage{}, "create_time")); diff != "" {
+		t.Errorf("failed work unit %d system message mismatch (-want +got):\n%s", failWID, diff)
 	}
 }
 

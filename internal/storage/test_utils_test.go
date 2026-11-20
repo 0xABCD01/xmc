@@ -173,4 +173,41 @@ func TestMockStorage_FetchUpdatingWorkUnits(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("returns FetchWorkUnitErr when set", func(t *testing.T) {
+		wantErr := errors.New("fetch failed")
+		m := &MockStorage{WorkUnit: stored, FetchWorkUnitErr: wantErr}
+		if got, err := m.FetchUpdatingWorkUnits(ctx, 123, []int64{456}); !errors.Is(err, wantErr) || got != nil {
+			t.Errorf("FetchUpdatingWorkUnits() = %v, %v, want nil, %v", got, err, wantErr)
+		}
+	})
+
+	t.Run("returns nil when WorkUnit and InsertedWorkUnit are unset", func(t *testing.T) {
+		m := &MockStorage{}
+		if got, err := m.FetchUpdatingWorkUnits(ctx, 123, []int64{456}); err != nil || got != nil {
+			t.Errorf("FetchUpdatingWorkUnits() = %v, %v, want nil, nil", got, err)
+		}
+	})
+
+	t.Run("overlays UpdatedWorkUnitExecutions only for matching WIDs", func(t *testing.T) {
+		m := &MockStorage{
+			WorkUnit:                  stored,
+			UpdatedWorkUnitExecutions: map[int64]*essmsgpb.WorkUnitExecution{456: written},
+		}
+		got, err := m.FetchUpdatingWorkUnits(ctx, 123, []int64{456, 789})
+		if err != nil {
+			t.Fatalf("FetchUpdatingWorkUnits() error = %v", err)
+		}
+		want := map[int64]string{
+			456: written.GetName(),
+			789: stored.GetCurrentWorkUnitExecution().GetName(),
+		}
+		gotNames := map[int64]string{
+			456: got[456].GetCurrentWorkUnitExecution().GetName(),
+			789: got[789].GetCurrentWorkUnitExecution().GetName(),
+		}
+		if diff := cmp.Diff(want, gotNames); diff != "" {
+			t.Errorf("FetchUpdatingWorkUnits() execution names mismatch (-want +got):\n%s", diff)
+		}
+	})
 }
