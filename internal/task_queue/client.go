@@ -288,15 +288,25 @@ func WithRedisPublisher(publisher redisclient.Publisher) Option {
 	}
 }
 
+// WithRedisContextTimeout makes the default Redis publisher's socket reads and writes honor the
+// deadline of each call's context instead of only go-redis's fixed read and write timeouts. It has
+// no effect when WithRedisPublisher supplies the publisher.
+func WithRedisContextTimeout() Option {
+	return func(c *Client) {
+		c.redisContextTimeout = true
+	}
+}
+
 type Client struct {
-	invokerSA        string
-	gcpProjectID     string
-	actuatorURL      string
-	actuatorAudience string
-	signer           func() (jwt.Signer, error)
-	signatureTTL     time.Duration
-	redisClient      redisclient.Publisher
-	tokenProvider    TokenProvider
+	invokerSA           string
+	gcpProjectID        string
+	actuatorURL         string
+	actuatorAudience    string
+	signer              func() (jwt.Signer, error)
+	signatureTTL        time.Duration
+	redisClient         redisclient.Publisher
+	redisContextTimeout bool
+	tokenProvider       TokenProvider
 }
 
 // New creates a new Client instance.
@@ -311,12 +321,6 @@ func New(ctx context.Context, projectID, invokerSA, actuatorURL, actuatorAudienc
 		ttl = DefaultSignatureTTLSeconds
 	}
 
-	redisConfig := redisclient.Config{
-		Addr: redisAddr,
-	}
-	redisClient := redisclient.NewPublisher(redisConfig, constants.RedisStream)
-	logging.Info(ctx, "Initialized Redis task queue publisher")
-
 	c := &Client{
 		invokerSA:        invokerSA,
 		gcpProjectID:     projectID,
@@ -324,11 +328,16 @@ func New(ctx context.Context, projectID, invokerSA, actuatorURL, actuatorAudienc
 		actuatorAudience: aud,
 		signer:           signer,
 		signatureTTL:     time.Duration(ttl) * time.Second,
-		redisClient:      redisClient,
 	}
 
 	for _, opt := range opts {
 		opt(c)
+	}
+
+	if c.redisClient == nil {
+		redisConfig := redisclient.Config{Addr: redisAddr, ContextTimeoutEnabled: c.redisContextTimeout}
+		c.redisClient = redisclient.NewPublisher(redisConfig, constants.RedisStream)
+		logging.Info(ctx, "Initialized Redis task queue publisher", "context_timeout_enabled", c.redisContextTimeout)
 	}
 
 	if c.tokenProvider == nil {
