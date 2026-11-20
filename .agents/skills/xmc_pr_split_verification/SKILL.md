@@ -83,7 +83,7 @@ Entrypoints (function bodies or file:symbol paths of every new or extended handl
 
 Your Task:
 1. Conduct a strict Single Responsibility Principle (SRP) audit of the changes.
-2. Before the Step Ladder, check Pillar 4; if it matches, skip the Step Ladder. Otherwise, for every entrypoint above, produce the Step Ladder table FIRST (ordered steps, core vs deferrable depth, assigned slice) per Pillar 2 "Progressive Entrypoint Depth (Step Ladder)".
+2. Before the Step Ladder, check Pillar 4; if it matches, skip the Step Ladder and steps 3–5 (you may still offer an optional zero-cost split along existing commit or domain boundaries) and go to step 6. Otherwise, for every entrypoint above, produce the Step Ladder table FIRST (ordered steps, core vs deferrable depth, assigned slice) per Pillar 2 "Progressive Entrypoint Depth (Step Ladder)".
 3. Then derive your own split candidates. Prioritize VERTICAL SPLITS (by end-to-end user flow or functional depth) over horizontal architectural layers (DB vs API vs UI).
 4. Verify the Dead Code & Reachability Invariant: Intermediate PRs MUST NOT introduce dead, uncalled, or unreachable code (disclosed stepping stones are allowed). Every slice must be independently tested via unit/integration/E2E tests.
 5. Produce your best split as a concrete `gh-stack` execution plan with branch names, commit messages, file allocations, and measured production/test lines per layer, plus any residual overage.
