@@ -25,8 +25,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 	msgpb "xmanager_cloud/api/protos/experiment"
-	tpb "xmanager_cloud/api/protos/task_queue"
 	"xmanager_cloud/cmd/experiment_state_server/config"
 	"xmanager_cloud/internal/experiment/experimenttest"
 	"xmanager_cloud/internal/grpcerr"
@@ -39,18 +40,71 @@ import (
 
 const batchParent = "experiments/123"
 
-// batchStorage counts transactions and records one operation per AddWorkUnitOperation call.
+// batchStorage counts transactions, records one operation per AddWorkUnitOperation call, and keeps
+// the inserted work units so that status updates of created work units land. Like the real
+// backends, its transactions and operation updates fail once their context is done. It also
+// records, per stopped operation, whether its work unit was already marked FATAL.
 type batchStorage struct {
 	*storage.MockStorage
 	txCalls    int
 	operations []*msgpb.OperationMetadata
 	// operationErrs maps a work unit name to the error of its AddWorkUnitOperation call.
 	operationErrs map[string]error
+	// workUnits holds the inserted work units by ID.
+	workUnits map[int64]*msgpb.WorkUnit
+	// fatalWhenStopped maps the ID of each work unit whose operation was updated to whether its
+	// FATAL system message was already persisted at that point.
+	fatalWhenStopped map[int64]bool
 }
 
 func (s *batchStorage) RunInTransaction(ctx context.Context, fn func(ctx context.Context, tx *storage.Transaction) error) error {
 	s.txCalls++
-	return s.MockStorage.RunInTransaction(ctx, fn)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.MockStorage.RunInTransaction(ctx, func(ctx context.Context, tx *storage.Transaction) error {
+		tx.WorkUnits = s
+		return fn(ctx, tx)
+	})
+}
+
+func (s *batchStorage) InsertWorkUnits(ctx context.Context, wus []*msgpb.WorkUnit) error {
+	if err := s.MockStorage.InsertWorkUnits(ctx, wus); err != nil {
+		return err
+	}
+	for _, wu := range wus {
+		_, wid, err := validator.ValidateWorkUnitName(wu.GetName())
+		if err != nil {
+			continue // Work units with invalid names cannot be updated later.
+		}
+		if s.workUnits == nil {
+			s.workUnits = make(map[int64]*msgpb.WorkUnit)
+		}
+		s.workUnits[wid] = proto.Clone(wu).(*msgpb.WorkUnit)
+	}
+	return nil
+}
+
+func (s *batchStorage) FetchUpdatingWorkUnits(_ context.Context, _ int64, wids []int64) (map[int64]*msgpb.WorkUnit, error) {
+	res := make(map[int64]*msgpb.WorkUnit, len(wids))
+	for _, wid := range wids {
+		if wu, ok := s.workUnits[wid]; ok {
+			res[wid] = proto.Clone(wu).(*msgpb.WorkUnit)
+		}
+	}
+	return res, nil
+}
+
+func (s *batchStorage) UpdateWorkUnitOperation(ctx context.Context, update *storage.OperationUpdate) (*lropb.Operation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.fatalWhenStopped == nil {
+		s.fatalWhenStopped = make(map[int64]bool)
+	}
+	exec := s.UpdatedWorkUnitExecutions[update.WID]
+	s.fatalWhenStopped[update.WID] = exec.GetStatus().GetSystemMessage().GetSeverity() == msgpb.StructuredMessage_FATAL
+	return s.MockStorage.UpdateWorkUnitOperation(ctx, update)
 }
 
 func (s *batchStorage) AddWorkUnitOperation(ctx context.Context, xid, wid int64, metadata *msgpb.OperationMetadata) (*lropb.Operation, error) {
@@ -83,7 +137,8 @@ func batchRequest(n int, fn func(req *msgpb.BatchCreateWorkUnitsRequest)) *msgpb
 		req.Requests = append(req.Requests, &msgpb.CreateWorkUnitRequest{WorkUnit: &msgpb.WorkUnit{
 			WorkUnitType: msgpb.WorkUnit_STANDARD,
 			Executable:   testExecutable,
-			Notes:        fmt.Sprintf("trial-%d", i+1),
+			Parameters:   experimenttest.TrialParameters(),
+			TrialId:      fmt.Sprintf("trial-%d", i+1),
 		}})
 	}
 	return prototest.Modify(req, fn)
@@ -98,7 +153,7 @@ func newBatchServer(t *testing.T, st storage.Storage, actuator *tq.FakeClient, o
 	}, opts...)...)
 }
 
-func TestBatchCreateWorkUnits_CreatesTrialsInOneTransaction(t *testing.T) {
+func TestBatchCreateWorkUnits_CreatesTrialsInOneTransactionAndOneEnqueue(t *testing.T) {
 	// The configured principal differs in case from the authenticated test@example.com.
 	st := newBatchStorage("TEST@example.com")
 	actuator := &tq.FakeClient{}
@@ -112,17 +167,17 @@ func TestBatchCreateWorkUnits_CreatesTrialsInOneTransaction(t *testing.T) {
 	var gotNames, gotTrials []string
 	for _, wu := range resp.GetWorkUnits() {
 		gotNames = append(gotNames, wu.GetName())
-		gotTrials = append(gotTrials, wu.GetNotes())
+		gotTrials = append(gotTrials, wu.GetTrialId())
 	}
 	wantNames := []string{"experiments/123/workUnits/4", "experiments/123/workUnits/5", "experiments/123/workUnits/6"}
 	if diff := cmp.Diff(wantNames, gotNames); diff != "" {
 		t.Errorf("created work unit names mismatch (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff([]string{"trial-1", "trial-2", "trial-3"}, gotTrials); diff != "" {
-		t.Errorf("created work unit notes mismatch (-want +got):\n%s", diff)
+		t.Errorf("created trial IDs mismatch (-want +got):\n%s", diff)
 	}
-	if st.txCalls != 1 || st.UpdatedExperiment == nil || st.InsertedWorkUnit.GetName() != wantNames[2] {
-		t.Errorf("transactions = %d, experiment updated = %v, last inserted = %q; want 1, true, %q", st.txCalls, st.UpdatedExperiment != nil, st.InsertedWorkUnit.GetName(), wantNames[2])
+	if st.txCalls != 1 || st.UpdatedExperiment == nil || len(st.InsertedWorkUnits) != 3 {
+		t.Errorf("transactions = %d, experiment updated = %v, inserted = %d; want 1, true, 3", st.txCalls, st.UpdatedExperiment != nil, len(st.InsertedWorkUnits))
 	}
 	var gotOps []string
 	for _, op := range st.operations {
@@ -136,8 +191,8 @@ func TestBatchCreateWorkUnits_CreatesTrialsInOneTransaction(t *testing.T) {
 	if diff := cmp.Diff(wantOps, gotOps); diff != "" {
 		t.Errorf("operations mismatch (-want +got):\n%s", diff)
 	}
-	if len(actuator.EnqueuedTasks) != 3 {
-		t.Fatalf("enqueued tasks = %d, want 3", len(actuator.EnqueuedTasks))
+	if actuator.EnqueueBatchCalls != 1 || len(actuator.EnqueuedTasks) != 3 {
+		t.Fatalf("enqueue batch calls = %d, tasks = %d; want 1, 3", actuator.EnqueueBatchCalls, len(actuator.EnqueuedTasks))
 	}
 	for i, task := range actuator.EnqueuedTasks {
 		wid := int64(4 + i)
@@ -204,10 +259,14 @@ func TestBatchCreateWorkUnits_Rejections(t *testing.T) {
 			st.ComponentRepository = &storage.MockComponentRepository{GetActiveComponentErr: errors.New("catalog down")}
 			return st
 		}, wantCode: codes.Internal},
+		{name: "parameters do not match the study", req: batchRequest(2, func(r *msgpb.BatchCreateWorkUnitsRequest) {
+			r.Requests[1].WorkUnit.Parameters.Fields["momentum"] = r.Requests[1].WorkUnit.Parameters.Fields["dropout"]
+		}), wantCode: codes.InvalidArgument, wantErrSub: "requests[1]"},
+		{name: "missing trial ID", req: batchRequest(1, func(r *msgpb.BatchCreateWorkUnitsRequest) { r.Requests[0].WorkUnit.TrialId = "" }), wantCode: codes.InvalidArgument},
 		{name: "unknown execution environment", opts: []testServerOpt{withConfig(&config.Config{DefaultExecutionEnvironment: "unknown"})}, wantCode: codes.Internal, wantErrSub: "requests[0]"},
 		{name: "storage failure", storage: func() *batchStorage {
 			st := newBatchStorage("test@example.com")
-			st.InsertWorkUnitErr = errors.New("insert failed")
+			st.InsertWorkUnitsErr = errors.New("insert failed")
 			return st
 		}, wantCode: codes.Internal},
 	}
@@ -232,8 +291,8 @@ func TestBatchCreateWorkUnits_Rejections(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.wantErrSub) {
 				t.Errorf("BatchCreateWorkUnits() = %v, want it to contain %q", err, tt.wantErrSub)
 			}
-			if st.InsertedWorkUnit != nil || len(actuator.EnqueuedTasks) != 0 {
-				t.Errorf("rejected request inserted %v and enqueued %d tasks, want none", st.InsertedWorkUnit, len(actuator.EnqueuedTasks))
+			if len(st.InsertedWorkUnits) != 0 || actuator.EnqueueBatchCalls != 0 {
+				t.Errorf("rejected request inserted %d work units and made %d enqueue calls, want none", len(st.InsertedWorkUnits), actuator.EnqueueBatchCalls)
 			}
 		})
 	}
@@ -250,38 +309,111 @@ func TestBatchCreateWorkUnits_ErrorsHideAuthorizationDetails(t *testing.T) {
 	}
 }
 
-func TestBatchCreateWorkUnits_SchedulingFailureStopsAtFirstFailure(t *testing.T) {
+func TestBatchCreateWorkUnits_ExtraActuatorResultsIgnored(t *testing.T) {
+	actuator := &tq.FakeClient{EnqueueBatchFunc: func(_ context.Context, tasks []tq.WorkUnitTask) []error {
+		return append(make([]error, len(tasks)), errors.New("result for no task"))
+	}}
+	server := newBatchServer(t, newBatchStorage("test@example.com"), actuator)
+
+	if _, err := server.BatchCreateWorkUnits(context.Background(), batchRequest(3, nil)); err != nil {
+		t.Errorf("BatchCreateWorkUnits() = %v, want nil", err)
+	}
+}
+
+// unschedulableMessage is the FATAL system message of a created work unit that could not be
+// scheduled, without its creation time.
+var unschedulableMessage = &msgpb.StructuredMessage{
+	UserFacingText: "Work unit was created but could not be scheduled for execution. Please restart the work unit.",
+	Severity:       msgpb.StructuredMessage_FATAL,
+	Source:         msgpb.StructuredMessage_XMANAGER_BACKEND,
+}
+
+// recordedSystemMessages returns the system messages of the work unit executions updated in st, by
+// work unit ID.
+func recordedSystemMessages(st *batchStorage) map[int64]*msgpb.StructuredMessage {
+	got := make(map[int64]*msgpb.StructuredMessage, len(st.UpdatedWorkUnitExecutions))
+	for wid, exec := range st.UpdatedWorkUnitExecutions {
+		got[wid] = exec.GetStatus().GetSystemMessage()
+	}
+	return got
+}
+
+// checkCompensation checks that exactly the work units wantFATAL got the unschedulable message,
+// before any of their operations was stopped, and that the last stopped operation, if
+// wantStoppedWID is not 0, belongs to that work unit, is done and carries an Internal error.
+func checkCompensation(t *testing.T, st *batchStorage, wantFATAL []int64, wantStopped int, wantStoppedWID int64) {
+	t.Helper()
+	want := make(map[int64]*msgpb.StructuredMessage, len(wantFATAL))
+	for _, wid := range wantFATAL {
+		want[wid] = proto.Clone(unschedulableMessage).(*msgpb.StructuredMessage)
+		want[wid].Parent = validator.ConstructWorkUnitName(123, wid)
+	}
+	ignoreTime := protocmp.IgnoreFields(&msgpb.StructuredMessage{}, "create_time")
+	if diff := cmp.Diff(want, recordedSystemMessages(st), protocmp.Transform(), ignoreTime); diff != "" {
+		t.Errorf("recorded system messages mismatch (-want +got):\n%s", diff)
+	}
+	if st.UpdateWorkUnitOperationCalls != wantStopped {
+		t.Errorf("stopped operations = %d, want %d", st.UpdateWorkUnitOperationCalls, wantStopped)
+	}
+	for _, wid := range wantFATAL {
+		if fatal, stopped := st.fatalWhenStopped[wid]; stopped && !fatal {
+			t.Errorf("operation of work unit %d was stopped before its FATAL message was persisted", wid)
+		}
+	}
+	if wantStoppedWID == 0 {
+		return
+	}
+	got := st.GotOperationUpdate
+	if got == nil || got.WID != wantStoppedWID || !got.Operation.GetDone() || got.Operation.GetError().GetCode() != int32(codes.Internal) {
+		t.Errorf("last operation update = %+v, want WID %d done with an Internal error", got, wantStoppedWID)
+	}
+}
+
+func TestBatchCreateWorkUnits_PartialSchedulingFailure(t *testing.T) {
 	tests := []struct {
-		name       string
-		mutate     func(st *batchStorage, actuator *tq.FakeClient)
-		wantTasks  int
-		wantFailed string
+		name           string
+		mutate         func(st *batchStorage, actuator *tq.FakeClient)
+		wantTasks      int
+		wantFailed     string
+		wantFATAL      []int64
+		wantStopped    int
+		wantStoppedWID int64
 	}{
 		{
 			name: "enqueue fails for one work unit",
 			mutate: func(_ *batchStorage, actuator *tq.FakeClient) {
-				actuator.EnqueueFunc = func(_ context.Context, target string, _ *msgpb.WorkUnit, _ *tpb.Action, _ string) error {
-					if target == validator.ConstructWorkUnitExecutionName(123, 5, 1) {
-						return errors.New("redis down")
-					}
-					return nil
-				}
+				actuator.EnqueueBatchErrs = []error{nil, errors.New("redis down"), nil}
 			},
-			wantTasks: 2, wantFailed: "experiments/123/workUnits/5",
+			wantTasks:  3,
+			wantFailed: "1 of 3 work units were created but could not be scheduled, restart them: experiments/123/workUnits/5:",
+			wantFATAL:  []int64{5}, wantStopped: 1, wantStoppedWID: 5,
+		},
+		{
+			name: "actuator answers fewer tasks than it was given",
+			mutate: func(_ *batchStorage, actuator *tq.FakeClient) {
+				actuator.EnqueueBatchFunc = func(context.Context, []tq.WorkUnitTask) []error { return []error{nil} }
+			},
+			wantTasks:  3,
+			wantFailed: "2 of 3 work units were created but could not be scheduled, restart them: experiments/123/workUnits/5, experiments/123/workUnits/6:",
+			wantFATAL:  []int64{5, 6}, wantStopped: 2, wantStoppedWID: 6,
 		},
 		{
 			name: "operation fails for one work unit",
 			mutate: func(st *batchStorage, _ *tq.FakeClient) {
-				st.operationErrs = map[string]error{"experiments/123/workUnits/5": errors.New("operation write failed")}
+				st.operationErrs = map[string]error{"experiments/123/workUnits/6": errors.New("operation write failed")}
 			},
-			wantTasks: 1, wantFailed: "experiments/123/workUnits/5",
+			wantTasks:  2,
+			wantFailed: "1 of 3 work units were created but could not be scheduled, restart them: experiments/123/workUnits/6:",
+			wantFATAL:  []int64{6}, wantStopped: 0,
 		},
 		{
 			name: "created work unit name cannot be parsed",
 			mutate: func(st *batchStorage, _ *tq.FakeClient) {
 				st.NextWorkUnitID = -5
 			},
-			wantTasks: 0, wantFailed: "experiments/123/workUnits/-5",
+			wantTasks:  0,
+			wantFailed: "3 of 3 work units were created but could not be scheduled, restart them: experiments/123/workUnits/-5, experiments/123/workUnits/-4, experiments/123/workUnits/-3:",
+			wantFATAL:  nil, wantStopped: 0,
 		},
 	}
 	for _, tt := range tests {
@@ -294,11 +426,76 @@ func TestBatchCreateWorkUnits_SchedulingFailureStopsAtFirstFailure(t *testing.T)
 			_, err := server.BatchCreateWorkUnits(context.Background(), batchRequest(3, nil))
 
 			if !errors.Is(err, grpcerr.ErrInternal) || !strings.Contains(err.Error(), tt.wantFailed) {
-				t.Errorf("BatchCreateWorkUnits() = %v, want Internal naming %q", err, tt.wantFailed)
+				t.Errorf("BatchCreateWorkUnits() = %v, want Internal containing %q", err, tt.wantFailed)
 			}
-			if len(actuator.EnqueuedTasks) != tt.wantTasks {
-				t.Errorf("enqueued tasks = %d, want %d", len(actuator.EnqueuedTasks), tt.wantTasks)
+			if actuator.EnqueueBatchCalls != 1 || len(actuator.EnqueuedTasks) != tt.wantTasks {
+				t.Errorf("enqueue batch calls = %d, tasks = %d; want 1, %d", actuator.EnqueueBatchCalls, len(actuator.EnqueuedTasks), tt.wantTasks)
 			}
+			checkCompensation(t, st, tt.wantFATAL, tt.wantStopped, tt.wantStoppedWID)
+		})
+	}
+}
+
+func TestBatchCreateWorkUnits_CompensatesAfterCallerCancels(t *testing.T) {
+	st := newBatchStorage("test@example.com")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The caller cancels the RPC during the enqueue, after the work units were committed: none of
+	// them can be enqueued, and all of them must still be compensated.
+	actuator := &tq.FakeClient{EnqueueBatchFunc: func(ctx context.Context, tasks []tq.WorkUnitTask) []error {
+		cancel()
+		errs := make([]error, len(tasks))
+		for i := range errs {
+			errs[i] = ctx.Err()
+		}
+		return errs
+	}}
+	server := newBatchServer(t, st, actuator)
+
+	_, err := server.BatchCreateWorkUnits(ctx, batchRequest(3, nil))
+
+	wantFailed := "3 of 3 work units were created but could not be scheduled, restart them: experiments/123/workUnits/4, experiments/123/workUnits/5, experiments/123/workUnits/6:"
+	if !errors.Is(err, grpcerr.ErrInternal) || !strings.Contains(err.Error(), wantFailed) {
+		t.Errorf("BatchCreateWorkUnits() = %v, want Internal containing %q", err, wantFailed)
+	}
+	checkCompensation(t, st, []int64{4, 5, 6}, 3, 6)
+}
+
+func TestCompensateFailedWorkUnits_UnknownIDSkipsStatusUpdate(t *testing.T) {
+	tests := []struct {
+		name           string
+		operation      *lropb.Operation
+		wantStopped    int
+		wantStoppedWID int64
+	}{
+		{name: "without operation", wantStopped: 0},
+		{name: "with operation", operation: &lropb.Operation{Name: validator.ConstructOperationName(123, 4, "00000004-0000-0000-0000-000000000000")}, wantStopped: 1, wantStoppedWID: 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newBatchStorage("test@example.com")
+			server := newBatchServer(t, st, &tq.FakeClient{})
+			// The execution name parses, so only the unknown ID (0) prevents a status update.
+			failed := failedWorkUnit{
+				createdWorkUnit: createdWorkUnit{
+					wu: &msgpb.WorkUnit{
+						Name:                     "experiments/123/workUnits/invalid",
+						CurrentWorkUnitExecution: &msgpb.WorkUnitExecution{Name: validator.ConstructWorkUnitExecutionName(123, 4, 1)},
+					},
+					operation: tt.operation,
+				},
+				cause: errors.New("name does not parse"),
+			}
+
+			got := server.WorkUnitHandler.compensateFailedWorkUnits(context.Background(), 123, []failedWorkUnit{failed})
+
+			if diff := cmp.Diff([]string{"experiments/123/workUnits/invalid"}, got); diff != "" {
+				t.Errorf("compensateFailedWorkUnits() names mismatch (-want +got):\n%s", diff)
+			}
+			if st.txCalls != 0 {
+				t.Errorf("status update transactions = %d, want 0 for a work unit without an ID", st.txCalls)
+			}
+			checkCompensation(t, st, nil, tt.wantStopped, tt.wantStoppedWID)
 		})
 	}
 }

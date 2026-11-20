@@ -18,21 +18,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
+	lropb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	msgpb "xmanager_cloud/api/protos/experiment"
 	"xmanager_cloud/internal/grpcerr"
 	"xmanager_cloud/internal/logging"
-	client "xmanager_cloud/internal/task_queue"
+	"xmanager_cloud/internal/storage"
+	tq "xmanager_cloud/internal/task_queue"
 	"xmanager_cloud/internal/validator"
 	"xmanager_cloud/internal/workunit"
 )
 
+// batchActuationCleanupTimeout bounds the compensation of created work units that could not be
+// scheduled, which runs even after the caller cancels the RPC.
+const batchActuationCleanupTimeout = 10 * time.Second
+
 // BatchCreateWorkUnits creates the trials of a STUDY experiment for the study controller: it
-// persists all of them in one transaction, records one creation operation per work unit, and
-// enqueues their creation tasks.
+// validates every work unit against the study config, persists all of them in one transaction,
+// records one creation operation per work unit, and enqueues their creation tasks in one round trip.
 func (h *WorkUnitHandler) BatchCreateWorkUnits(ctx context.Context, req *msgpb.BatchCreateWorkUnitsRequest) (*msgpb.BatchCreateWorkUnitsResponse, error) {
 	ctx = logging.InjectOperation(ctx, "")
 	logging.Info(ctx, "Batch create work units", "parent", req.GetParent(), "count", len(req.GetRequests()))
@@ -56,8 +64,8 @@ func (h *WorkUnitHandler) BatchCreateWorkUnits(ctx context.Context, req *msgpb.B
 		return nil, fmt.Errorf("BatchCreateWorkUnits validation failed: %w", err)
 	}
 
-	// 6. Assemble each work unit.
-	wus, err := h.assembleStudyTrials(ctx, xid, req.GetRequests())
+	// 6. Validate the trial fields and assemble each work unit.
+	wus, err := h.assembleStudyTrials(ctx, xid, exp.GetStudyConfig(), req.GetRequests())
 	if err != nil {
 		return nil, err
 	}
@@ -113,11 +121,15 @@ func (h *WorkUnitHandler) fetchBatchCreateParent(ctx context.Context, xid int64)
 	return exp, nil
 }
 
-// assembleStudyTrials returns copies of the requested work units assembled for creation in
-// experiment xid.
-func (h *WorkUnitHandler) assembleStudyTrials(ctx context.Context, xid int64, reqs []*msgpb.CreateWorkUnitRequest) ([]*msgpb.WorkUnit, error) {
+// assembleStudyTrials validates the trial fields of each requested work unit against cfg and
+// returns copies assembled for creation in experiment xid.
+func (h *WorkUnitHandler) assembleStudyTrials(ctx context.Context, xid int64, cfg *msgpb.StudyConfig, reqs []*msgpb.CreateWorkUnitRequest) ([]*msgpb.WorkUnit, error) {
 	wus := make([]*msgpb.WorkUnit, len(reqs))
 	for i, req := range reqs {
+		if err := validator.ValidateWorkUnitTrialFields(req.GetWorkUnit(), cfg); err != nil {
+			logging.Warn(ctx, "BatchCreateWorkUnits validation failed", "index", i, "error", err)
+			return nil, fmt.Errorf("BatchCreateWorkUnits validation failed: requests[%d]: %w", i, err)
+		}
 		wu, err := h.assembleNewWorkUnit(ctx, xid, 0, proto.Clone(req.GetWorkUnit()).(*msgpb.WorkUnit))
 		if err != nil {
 			return nil, fmt.Errorf("requests[%d]: %w", i, err)
@@ -140,32 +152,120 @@ func batchCreateError(err error) error {
 	return fmt.Errorf("failed to batch create work units: %v: %w", err, grpcerr.ErrInternal)
 }
 
-// actuateCreatedWorkUnits records a creation operation for each created work unit and enqueues its
-// creation task, in order. It stops at the first failure and returns it as Internal; the work units
-// are already stored.
+// actuateCreatedWorkUnits records a creation operation for each created work unit and enqueues
+// their creation tasks in one round trip. Work units whose operation or task cannot be created are
+// compensated (see compensateFailedWorkUnits) and named in the returned Internal error.
 func (h *WorkUnitHandler) actuateCreatedWorkUnits(ctx context.Context, xid int64, priority msgpb.Priority, created []*msgpb.WorkUnit, email string) error {
+	var failed []failedWorkUnit
+	var queued []createdWorkUnit
 	for _, wu := range created {
-		if err := h.actuateCreatedWorkUnit(ctx, xid, priority, wu, email); err != nil {
-			logging.Error(ctx, "Failed to schedule created work unit", "name", wu.GetName(), "error", err)
-			return fmt.Errorf("work unit %s was created but could not be scheduled: %v: %w", wu.GetName(), err, grpcerr.ErrInternal)
+		cwu, err := h.addCreateOperation(ctx, xid, wu, email)
+		if err != nil {
+			failed = append(failed, failedWorkUnit{createdWorkUnit: cwu, cause: err})
+			continue
+		}
+		queued = append(queued, cwu)
+	}
+	tasks := make([]tq.WorkUnitTask, len(queued))
+	for i, cwu := range queued {
+		tasks[i] = tq.WorkUnitTask{Target: cwu.wu.GetCurrentWorkUnitExecution().GetName(), WorkUnit: cwu.wu, Action: tq.CreateAction(priority, email), OperationName: cwu.operation.GetName()}
+	}
+	results := h.actuator.EnqueueWorkUnitTasks(ctx, tasks)
+	for i, cwu := range queued {
+		if err := enqueueResult(results, i); err != nil {
+			failed = append(failed, failedWorkUnit{createdWorkUnit: cwu, cause: err})
 		}
 	}
-	return nil
+	if len(failed) == 0 {
+		return nil
+	}
+	names := h.compensateFailedWorkUnits(ctx, xid, failed)
+	return fmt.Errorf("%d of %d work units were created but could not be scheduled, restart them: %s: %w", len(failed), len(created), strings.Join(names, ", "), grpcerr.ErrInternal)
 }
 
-// actuateCreatedWorkUnit records the creation operation of wu and enqueues its creation task.
-func (h *WorkUnitHandler) actuateCreatedWorkUnit(ctx context.Context, xid int64, priority msgpb.Priority, wu *msgpb.WorkUnit, email string) error {
+// enqueueResult returns the enqueue error of task i from results. A task without a result fails
+// rather than being assumed enqueued; results beyond the tasks are ignored by the caller.
+func enqueueResult(results []error, i int) error {
+	if i >= len(results) {
+		return errors.New("no response from actuator")
+	}
+	return results[i]
+}
+
+// createdWorkUnit is a created work unit with its ID and creation operation, if any.
+type createdWorkUnit struct {
+	wu        *msgpb.WorkUnit
+	wid       int64
+	operation *lropb.Operation
+}
+
+// failedWorkUnit is a created work unit that could not be scheduled because of cause.
+type failedWorkUnit struct {
+	createdWorkUnit
+	cause error
+}
+
+// addCreateOperation records the creation operation of wu.
+func (h *WorkUnitHandler) addCreateOperation(ctx context.Context, xid int64, wu *msgpb.WorkUnit, email string) (createdWorkUnit, error) {
+	cwu := createdWorkUnit{wu: wu}
 	_, wid, err := validator.ValidateWorkUnitName(wu.GetName())
 	if err != nil {
-		return fmt.Errorf("failed to validate work unit name: %w", err)
+		return cwu, fmt.Errorf("failed to validate work unit name: %w", err)
 	}
+	cwu.wid = wid
 	operation, err := h.storage.AddWorkUnitOperation(ctx, xid, wid, &msgpb.OperationMetadata{
 		Target:            wu.GetName(),
 		ActionType:        msgpb.OperationMetadata_CREATE,
 		OriginalRequester: email,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to add work unit operation: %w", err)
+		return cwu, fmt.Errorf("failed to add work unit operation: %w", err)
 	}
-	return h.actuator.EnqueueWorkUnitTask(ctx, wu.GetCurrentWorkUnitExecution().GetName(), wu, client.CreateAction(priority, email), operation.GetName())
+	cwu.operation = operation
+	return cwu, nil
+}
+
+// compensateFailedWorkUnits records a FATAL system message on every failed work unit whose ID and
+// execution name are known, in a single write, and then stops the operation of every failed work
+// unit that has one. It runs under a cleanup context detached from ctx, so that a cancelled RPC
+// still compensates the work units it already committed. The FATAL write goes first, so that slow
+// per-work-unit operation stops cannot use up the cleanup budget before it. It returns the names of
+// the failed work units.
+func (h *WorkUnitHandler) compensateFailedWorkUnits(ctx context.Context, xid int64, failed []failedWorkUnit) []string {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), batchActuationCleanupTimeout)
+	defer cancel()
+	names := make([]string, len(failed))
+	var updates []*storage.WorkUnitExecutionUpdate
+	for i, f := range failed {
+		names[i] = f.wu.GetName()
+		logging.Error(ctx, "Failed to schedule created work unit", "name", names[i], "error", f.cause)
+		if update := unschedulableUpdateOf(ctx, f.createdWorkUnit); update != nil {
+			updates = append(updates, update)
+		}
+	}
+	if len(updates) > 0 {
+		if _, err := h.workUnitUpdater.UpdateWorkUnitExecutions(cleanupCtx, xid, updates); err != nil {
+			logging.Error(ctx, "Failed to mark work units unschedulable", "count", len(updates), "error", err)
+		}
+	}
+	for _, f := range failed {
+		if f.operation != nil {
+			h.stopOperationOnError(cleanupCtx, f.operation, fmt.Errorf("failed to enqueue work unit for scheduling: %v: %w", f.cause, grpcerr.ErrInternal))
+		}
+	}
+	return names
+}
+
+// unschedulableUpdateOf returns the FATAL status update of cwu, or nil when its ID is unknown or its
+// execution name is invalid, which is logged.
+func unschedulableUpdateOf(ctx context.Context, cwu createdWorkUnit) *storage.WorkUnitExecutionUpdate {
+	if cwu.wid == 0 {
+		return nil
+	}
+	update, err := newUnschedulableUpdate(cwu.wid, cwu.wu)
+	if err != nil {
+		logging.Error(ctx, "Failed to mark work unit unschedulable", "name", cwu.wu.GetName(), "error", err)
+		return nil
+	}
+	return update
 }
