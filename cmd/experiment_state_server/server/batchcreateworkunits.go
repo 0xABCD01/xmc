@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	lropb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/codes"
@@ -27,10 +28,15 @@ import (
 	msgpb "xmanager_cloud/api/protos/experiment"
 	"xmanager_cloud/internal/grpcerr"
 	"xmanager_cloud/internal/logging"
+	"xmanager_cloud/internal/storage"
 	client "xmanager_cloud/internal/task_queue"
 	"xmanager_cloud/internal/validator"
 	"xmanager_cloud/internal/workunit"
 )
+
+// batchActuationCleanupTimeout bounds the compensation of created work units that could not be
+// scheduled, which runs even after the caller cancels the RPC.
+const batchActuationCleanupTimeout = 10 * time.Second
 
 // BatchCreateWorkUnits creates the trials of a STUDY experiment for the study controller: it
 // persists all of them in one transaction, records one creation operation per work unit, and
@@ -143,15 +149,15 @@ func batchCreateError(err error) error {
 }
 
 // actuateCreatedWorkUnits records a creation operation for each created work unit and enqueues
-// their creation tasks. A work unit whose operation or task cannot be created gets a FATAL status
-// message, like in CreateWorkUnit, and is named in the returned Internal error.
+// their creation tasks. Work units whose operation or task cannot be created are compensated (see
+// compensateFailedWorkUnits) and named in the returned Internal error.
 func (h *WorkUnitHandler) actuateCreatedWorkUnits(ctx context.Context, xid int64, priority msgpb.Priority, created []*msgpb.WorkUnit, email string) error {
-	var failed []string
+	var failed []failedWorkUnit
 	var queued []createdWorkUnit
 	for _, wu := range created {
 		cwu, err := h.addCreateOperation(ctx, xid, wu, email)
 		if err != nil {
-			failed = append(failed, h.failCreatedWorkUnit(ctx, xid, cwu, err))
+			failed = append(failed, failedWorkUnit{createdWorkUnit: cwu, cause: err})
 			continue
 		}
 		queued = append(queued, cwu)
@@ -159,13 +165,14 @@ func (h *WorkUnitHandler) actuateCreatedWorkUnits(ctx context.Context, xid int64
 	for _, cwu := range queued {
 		err := h.actuator.EnqueueWorkUnitTask(ctx, cwu.wu.GetCurrentWorkUnitExecution().GetName(), cwu.wu, client.CreateAction(priority, email), cwu.operation.GetName())
 		if err != nil {
-			failed = append(failed, h.failCreatedWorkUnit(ctx, xid, cwu, err))
+			failed = append(failed, failedWorkUnit{createdWorkUnit: cwu, cause: err})
 		}
 	}
-	if len(failed) > 0 {
-		return fmt.Errorf("%d of %d work units were created but could not be scheduled, restart them: %s: %w", len(failed), len(created), strings.Join(failed, ", "), grpcerr.ErrInternal)
+	if len(failed) == 0 {
+		return nil
 	}
-	return nil
+	names := h.compensateFailedWorkUnits(ctx, xid, failed)
+	return fmt.Errorf("%d of %d work units were created but could not be scheduled, restart them: %s: %w", len(failed), len(created), strings.Join(names, ", "), grpcerr.ErrInternal)
 }
 
 // createdWorkUnit is a created work unit with its ID and creation operation, if any.
@@ -173,6 +180,12 @@ type createdWorkUnit struct {
 	wu        *msgpb.WorkUnit
 	wid       int64
 	operation *lropb.Operation
+}
+
+// failedWorkUnit is a created work unit that could not be scheduled because of cause.
+type failedWorkUnit struct {
+	createdWorkUnit
+	cause error
 }
 
 // addCreateOperation records the creation operation of wu.
@@ -195,17 +208,44 @@ func (h *WorkUnitHandler) addCreateOperation(ctx context.Context, xid int64, wu 
 	return cwu, nil
 }
 
-// failCreatedWorkUnit marks a created work unit that cannot be scheduled because of cause when its
-// ID is known, stops its operation when it has one, and returns its name.
-func (h *WorkUnitHandler) failCreatedWorkUnit(ctx context.Context, xid int64, cwu createdWorkUnit, cause error) string {
-	logging.Error(ctx, "Failed to schedule created work unit", "name", cwu.wu.GetName(), "error", cause)
-	if cwu.wid != 0 {
-		if err := h.markWorkUnitUnschedulable(ctx, xid, cwu.wid, cwu.wu); err != nil {
-			logging.Error(ctx, "Failed to mark work unit unschedulable", "name", cwu.wu.GetName(), "error", err)
+// compensateFailedWorkUnits records a FATAL system message on every failed work unit whose ID and
+// execution name are known, in a single write, and stops the operation of every failed work unit
+// that has one. It runs under a cleanup context detached from ctx, so that a cancelled RPC still
+// compensates the work units it already committed. It returns the names of the failed work units.
+func (h *WorkUnitHandler) compensateFailedWorkUnits(ctx context.Context, xid int64, failed []failedWorkUnit) []string {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), batchActuationCleanupTimeout)
+	defer cancel()
+	names := make([]string, len(failed))
+	var updates []*storage.WorkUnitExecutionUpdate
+	for i, f := range failed {
+		names[i] = f.wu.GetName()
+		logging.Error(ctx, "Failed to schedule created work unit", "name", names[i], "error", f.cause)
+		if update := unschedulableUpdateOf(ctx, f.createdWorkUnit); update != nil {
+			updates = append(updates, update)
+		}
+		if f.operation != nil {
+			h.stopOperationOnError(cleanupCtx, f.operation, fmt.Errorf("failed to enqueue work unit for scheduling: %v: %w", f.cause, grpcerr.ErrInternal))
 		}
 	}
-	if cwu.operation != nil {
-		h.stopOperationOnError(ctx, cwu.operation, fmt.Errorf("failed to enqueue work unit for scheduling: %v: %w", cause, grpcerr.ErrInternal))
+	if len(updates) == 0 {
+		return names
 	}
-	return cwu.wu.GetName()
+	if _, err := h.workUnitUpdater.UpdateWorkUnitExecutions(cleanupCtx, xid, updates); err != nil {
+		logging.Error(ctx, "Failed to mark work units unschedulable", "count", len(updates), "error", err)
+	}
+	return names
+}
+
+// unschedulableUpdateOf returns the FATAL status update of cwu, or nil when its ID is unknown or its
+// execution name is invalid, which is logged.
+func unschedulableUpdateOf(ctx context.Context, cwu createdWorkUnit) *storage.WorkUnitExecutionUpdate {
+	if cwu.wid == 0 {
+		return nil
+	}
+	update, err := newUnschedulableUpdate(cwu.wid, cwu.wu)
+	if err != nil {
+		logging.Error(ctx, "Failed to mark work unit unschedulable", "name", cwu.wu.GetName(), "error", err)
+		return nil
+	}
+	return update
 }

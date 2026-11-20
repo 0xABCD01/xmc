@@ -401,7 +401,30 @@ func TestBatchCreateWorkUnits_PartialSchedulingFailure(t *testing.T) {
 	}
 }
 
-func TestFailCreatedWorkUnit_UnknownIDSkipsStatusUpdate(t *testing.T) {
+func TestBatchCreateWorkUnits_CompensatesAfterCallerCancels(t *testing.T) {
+	st := newBatchStorage("test@example.com")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The caller cancels the RPC while work unit 5 is being enqueued, after the work units were
+	// committed: work units 5 and 6 cannot be enqueued and must still be compensated.
+	actuator := &tq.FakeClient{EnqueueFunc: func(ctx context.Context, target string, _ *msgpb.WorkUnit, _ *tpb.Action, _ string) error {
+		if target == validator.ConstructWorkUnitExecutionName(123, 5, 1) {
+			cancel()
+		}
+		return ctx.Err()
+	}}
+	server := newBatchServer(t, st, actuator)
+
+	_, err := server.BatchCreateWorkUnits(ctx, batchRequest(3, nil))
+
+	wantFailed := "2 of 3 work units were created but could not be scheduled, restart them: experiments/123/workUnits/5, experiments/123/workUnits/6:"
+	if !errors.Is(err, grpcerr.ErrInternal) || !strings.Contains(err.Error(), wantFailed) {
+		t.Errorf("BatchCreateWorkUnits() = %v, want Internal containing %q", err, wantFailed)
+	}
+	checkCompensation(t, st, []int64{5, 6}, 2, 6)
+}
+
+func TestCompensateFailedWorkUnits_UnknownIDSkipsStatusUpdate(t *testing.T) {
 	tests := []struct {
 		name           string
 		operation      *lropb.Operation
@@ -416,18 +439,21 @@ func TestFailCreatedWorkUnit_UnknownIDSkipsStatusUpdate(t *testing.T) {
 			st := newBatchStorage("test@example.com")
 			server := newBatchServer(t, st, &tq.FakeClient{})
 			// The execution name parses, so only the unknown ID (0) prevents a status update.
-			cwu := createdWorkUnit{
-				wu: &msgpb.WorkUnit{
-					Name:                     "experiments/123/workUnits/invalid",
-					CurrentWorkUnitExecution: &msgpb.WorkUnitExecution{Name: validator.ConstructWorkUnitExecutionName(123, 4, 1)},
+			failed := failedWorkUnit{
+				createdWorkUnit: createdWorkUnit{
+					wu: &msgpb.WorkUnit{
+						Name:                     "experiments/123/workUnits/invalid",
+						CurrentWorkUnitExecution: &msgpb.WorkUnitExecution{Name: validator.ConstructWorkUnitExecutionName(123, 4, 1)},
+					},
+					operation: tt.operation,
 				},
-				operation: tt.operation,
+				cause: errors.New("name does not parse"),
 			}
 
-			got := server.WorkUnitHandler.failCreatedWorkUnit(context.Background(), 123, cwu, errors.New("name does not parse"))
+			got := server.WorkUnitHandler.compensateFailedWorkUnits(context.Background(), 123, []failedWorkUnit{failed})
 
-			if got != "experiments/123/workUnits/invalid" {
-				t.Errorf("failCreatedWorkUnit() = %q, want the work unit name", got)
+			if diff := cmp.Diff([]string{"experiments/123/workUnits/invalid"}, got); diff != "" {
+				t.Errorf("compensateFailedWorkUnits() names mismatch (-want +got):\n%s", diff)
 			}
 			if st.txCalls != 0 {
 				t.Errorf("status update transactions = %d, want 0 for a work unit without an ID", st.txCalls)

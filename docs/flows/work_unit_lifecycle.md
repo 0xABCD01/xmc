@@ -148,8 +148,11 @@ or the payload is validated, so callers other than the study controller get `PER
 and learn nothing else. Unlike step 6 of `CreateWorkUnit`, the experiment priority comes from the
 read in step 3, and the experiment is not read again. Step 5 assigns the IDs `next .. next+N-1`
 from a single next-ID read. If step 6 or 7 fails for some work units, they get a `FATAL` status
-message and the RPC returns `INTERNAL` naming them. The trials are already stored, so the
-controller must not create them again when it retries; ESS does not deduplicate batches.
+message, written for all of them in one transaction (and any recorded operation from step 6 is
+marked `Done` with `INTERNAL`), and the RPC returns `INTERNAL` naming them; the remaining work units
+are still scheduled. This cleanup runs even if the caller cancels the RPC. The trials are already
+stored, so the controller must not create them again when it retries; ESS does not deduplicate
+batches.
 
 ---
 
