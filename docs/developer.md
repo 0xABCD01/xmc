@@ -233,9 +233,9 @@ To test one directory, run `bazel test //<dir>/...`. To list its test targets, r
 
 Automated unit test suites ([`.github/workflows/unit-tests.yml`](../.github/workflows/unit-tests.yml)) and code quality checks are executed on:
 * **Pull Requests** and the **merge queue**, scoped to the targets affected by the change.
-* **Pushes to `main`** via the post-submit pipeline ([`.github/workflows/postsubmit-main.yml`](../.github/workflows/postsubmit-main.yml)), which runs the full suite but restores the Bazel disk cache, so unchanged tests report cached results instead of executing.
+* **Pushes to `main`** via the post-submit pipeline ([`.github/workflows/postsubmit-main.yml`](../.github/workflows/postsubmit-main.yml)), which runs the full suite but restores the Bazel disk cache, so unchanged backend tests report cached results instead of executing.
 * **Nightly** via [`.github/workflows/nightly-unit-tests.yml`](../.github/workflows/nightly-unit-tests.yml) (2:00 AM UTC), which runs the full suite on `main` with `--nocache_test_results` (build outputs stay cached) so every test executes, catching flaky or broken tests that cached post-submit runs hide. A failure on `main` opens (or comments on) a `nightly-unit-test-failure` issue and @-mentions available `OWNERS`.
-* **Manual Dispatch** (`workflow_dispatch`) via the GitHub Actions UI; set the `cache-test-results` input to `false` to execute every backend test (`gh workflow run unit-tests.yml --ref <branch> -f cache-test-results=false`).
+* **Manual Dispatch** (`workflow_dispatch`) via the GitHub Actions UI; set the `cache-test-results` input to `false` to disable Bazel test-result caching (`--nocache_test_results`) for the selected backend tests (`gh workflow run unit-tests.yml --ref main -f cache-test-results=false` for the full suite, or `--ref <branch>` for branch-scoped tests).
 
 ---
 

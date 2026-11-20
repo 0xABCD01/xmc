@@ -902,26 +902,37 @@ describe('unit-tests alert profile', () => {
     assert.deepEqual(params.jobResults, [['unit-tests', 'failure']]);
   });
 
-  test('run files the alert under the unit-tests label and title', async () => {
+  /**
+   * Runs the alert orchestrator with a temp OWNERS file, a failed unit-tests NEEDS_CONTEXT, and
+   * an Octokit double. existingIssues is what the label query returns; every call is recorded.
+   * Environment overrides are applied for the duration of the run and restored afterwards.
+   */
+  async function runUnitTestsAlert({ existingIssues = [], runArgs = {}, env = {} }) {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-test-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
     fs.writeFileSync(ownersFile, 'Alice\n');
-    const origNeedsContext = process.env.NEEDS_CONTEXT;
-    process.env.NEEDS_CONTEXT = JSON.stringify({ 'unit-tests': { result: 'failure' } });
+    const overrides = { NEEDS_CONTEXT: JSON.stringify({ 'unit-tests': { result: 'failure' } }), ...env };
+    const saved = Object.fromEntries(Object.keys(overrides).map(k => [k, process.env[k]]));
+    Object.assign(process.env, overrides);
 
-    let queriedLabel = null;
-    let createdIssue = null;
+    const calls = { queriedLabel: null, createdIssue: null, createdComment: null };
     const mockGithub = {
       rest: {
         repos: { listPullRequestsAssociatedWithCommit: async () => ({ data: [] }) },
         issues: {
           listForRepo: async ({ labels }) => {
-            queriedLabel = labels;
-            return { data: [] };
+            calls.queriedLabel = labels;
+            return { data: existingIssues };
           },
           create: async (payload) => {
-            createdIssue = payload;
+            if (existingIssues.length > 0) assert.fail('Should not create an issue when one is open');
+            calls.createdIssue = payload;
             return { data: { number: 7 } };
+          },
+          createComment: async (payload) => {
+            if (existingIssues.length === 0) assert.fail('Should not create comment when no issue exists');
+            calls.createdComment = payload;
+            return { data: { id: 1 } };
           },
         },
       },
@@ -935,23 +946,52 @@ describe('unit-tests alert profile', () => {
         core: { info: () => {}, warning: () => {} },
         ownersPath: ownersFile,
         absenceContent: '',
-        profileName: 'unit-tests',
+        ...runArgs,
       });
-
-      assert.deepEqual(result, { status: 'issue_created', issueNumber: 7 });
-      assert.equal(queriedLabel, 'nightly-unit-test-failure');
-      assert.deepEqual(createdIssue.labels, ['nightly-unit-test-failure', 'bug']);
-      assert.ok(createdIssue.title.startsWith('🚨 Nightly Uncached Unit Test Failure ('));
-      assert.ok(createdIssue.body.includes('| **unit-tests** | `failure` |'));
-      assert.ok(createdIssue.body.includes('@Alice'));
+      return { result, ...calls };
     } finally {
-      if (origNeedsContext === undefined) delete process.env.NEEDS_CONTEXT;
-      else process.env.NEEDS_CONTEXT = origNeedsContext;
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  }
+
+  test('run files the alert under the unit-tests label and title', async () => {
+    const { result, queriedLabel, createdIssue } = await runUnitTestsAlert({ runArgs: { profileName: 'unit-tests' } });
+
+    assert.deepEqual(result, { status: 'issue_created', issueNumber: 7 });
+    assert.equal(queriedLabel, 'nightly-unit-test-failure');
+    assert.deepEqual(createdIssue.labels, ['nightly-unit-test-failure', 'bug']);
+    assert.ok(createdIssue.title.startsWith('🚨 Nightly Uncached Unit Test Failure ('));
+    assert.ok(createdIssue.body.includes('| **unit-tests** | `failure` |'));
+    assert.ok(createdIssue.body.includes('@Alice'));
   });
 
-  test('run reads the profile from process.env.ALERT_PROFILE when profileName is omitted', async () => {
+  test('run selects the unit-tests profile from process.env.ALERT_PROFILE as the workflow does', async () => {
+    const { result, queriedLabel, createdIssue } = await runUnitTestsAlert({ env: { ALERT_PROFILE: 'unit-tests' } });
+
+    assert.deepEqual(result, { status: 'issue_created', issueNumber: 7 });
+    assert.equal(queriedLabel, 'nightly-unit-test-failure');
+    assert.deepEqual(createdIssue.labels, ['nightly-unit-test-failure', 'bug']);
+    assert.ok(createdIssue.body.startsWith('### 🧪 Nightly Uncached Unit Tests Failed'));
+  });
+
+  test('run comments on the open nightly-unit-test-failure issue for a recurring failure', async () => {
+    const { result, queriedLabel, createdComment } = await runUnitTestsAlert({
+      existingIssues: [{ number: 31, pull_request: { url: 'pr' } }, { number: 30 }],
+      env: { ALERT_PROFILE: 'unit-tests' },
+    });
+
+    assert.deepEqual(result, { status: 'comment_created', issueNumber: 30 });
+    assert.equal(queriedLabel, 'nightly-unit-test-failure');
+    assert.equal(createdComment.issue_number, 30);
+    assert.ok(createdComment.body.startsWith('### 🚨 Recurring Nightly Test Failure Detected'));
+    assert.ok(createdComment.body.includes('| **unit-tests** | `failure` |'));
+  });
+
+  test('run rejects an unknown process.env.ALERT_PROFILE', async () => {
     const origProfile = process.env.ALERT_PROFILE;
     process.env.ALERT_PROFILE = 'nope';
     try {

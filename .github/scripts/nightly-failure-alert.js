@@ -110,8 +110,9 @@ const ALERT_PROFILES = {
     title: 'Nightly Uncached Unit Test Failure',
     heading: '🧪 Nightly Uncached Unit Tests Failed',
     description:
-      'The nightly full unit test run with Bazel test result caching disabled (`--nocache_test_results`) failed. ' +
-      'Post-submit runs reuse cached test results, so this failure may be a flaky or broken test they did not execute.',
+      'The nightly `unit-tests` run (backend Bazel tests with `--nocache_test_results`, plus the Angular UI and Helm chart suites) failed. ' +
+      'If the backend job failed, post-submit runs reuse cached Bazel test results, so the failure may be a flaky or broken test they did not execute; ' +
+      'check the workflow run to see which suite failed.',
     resultRows: ({ jobResults = [] }) => (jobResults.length > 0 ? jobResults : [['Jobs', 'unknown']]),
   },
 };
