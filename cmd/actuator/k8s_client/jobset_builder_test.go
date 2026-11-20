@@ -479,10 +479,7 @@ func TestFormatManagedByPodLabel(t *testing.T) {
 		{name: "clean_semver", appVersion: "1.0.0", want: "xmc-1.0.0"},
 		{name: "clean_semver_with_v_prefix", appVersion: "v1.2.3", want: "xmc-v1.2.3"},
 		{name: "nightly_tag", appVersion: "nightly-2026-11-13.123", want: "xmc-nightly-2026-11-13.123"},
-		{name: "developer_build_normalizes_to_dev", appVersion: "developer-build", want: "xmc-dev"},
-		{name: "dirty_tag_normalizes_to_dev", appVersion: "1.0.0-dirty", want: "xmc-dev"},
-		{name: "git_describe_commit_normalizes_to_dev", appVersion: "1.0.0-14-gabcdef1", want: "xmc-dev"},
-		{name: "bare_git_sha_normalizes_to_dev", appVersion: "962c757f9", want: "xmc-dev"},
+		{name: "numeric_version", appVersion: "20261113", want: "xmc-20261113"},
 		{name: "invalid_k8s_label_chars_falls_back", appVersion: "1.0.0/bad", want: "xmc"},
 		{name: "exceeds_63_chars_falls_back", appVersion: "1.0.0-012345678901234567890123456789012345678901234567890123456789", want: "xmc"},
 	}

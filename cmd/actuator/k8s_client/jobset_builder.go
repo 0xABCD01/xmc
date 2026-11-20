@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -38,27 +37,13 @@ import (
 	esspb "xmanager_cloud/api/protos/experiment"
 )
 
-var (
-	defaultLabels = map[string]string{
-		constants.ManagedByLabel: constants.XmcLabelValue,
-	}
-	gitDescribeCommitRe = regexp.MustCompile(`-\d+-g[0-9a-f]+$`)
-	bareGitCommitHashRe = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
-)
-
-func isDevBuildVersion(version string) bool {
-	if version == "developer-build" || strings.HasSuffix(version, "-dirty") {
-		return true
-	}
-	return gitDescribeCommitRe.MatchString(version) || bareGitCommitHashRe.MatchString(version)
+var defaultLabels = map[string]string{
+	constants.ManagedByLabel: constants.XmcLabelValue,
 }
 
 func formatManagedByPodLabel(appVersion string) string {
 	if appVersion == "" {
 		return constants.XmcLabelValue
-	}
-	if isDevBuildVersion(appVersion) {
-		return constants.XmcLabelValue + "-dev"
 	}
 	candidate := constants.XmcLabelValue + "-" + appVersion
 	if len(validation.IsValidLabelValue(candidate)) > 0 {
