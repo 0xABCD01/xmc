@@ -66,7 +66,6 @@ CORE_INFRA_FILES: set[str] = {
 # the Bazel dependency graph.
 HELM_SUITE_PREFIXES: tuple[str, ...] = (
     "deploy/helm/",
-    "deploy/ctk_v2/modules/",
     "test/helm/",
     ".github/actions/run-chart-tests/",
 )

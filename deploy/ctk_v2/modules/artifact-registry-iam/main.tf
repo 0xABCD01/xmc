@@ -26,15 +26,8 @@ locals {
   reader_sa_emails = toset(compact([for sa in var.reader_service_accounts : trimspace(sa)]))
 }
 
-check "artifact_registry_uri_when_readers_configured" {
-  assert {
-    condition     = length(local.reader_sa_emails) == 0 || local.is_artifact_registry
-    error_message = "image_registry (${var.image_registry}) must match '<LOCATION>-docker.pkg.dev/<PROJECT_ID>/<REPO>' when reader_service_accounts is non-empty."
-  }
-}
-
 resource "google_artifact_registry_repository_iam_member" "node_pool_reader" {
-  count      = local.is_artifact_registry && var.enable_node_sa_binding ? 1 : 0
+  count      = local.is_artifact_registry ? 1 : 0
   project    = local.repository_project_id
   location   = local.repository_location
   repository = local.repository_id

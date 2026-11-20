@@ -31,12 +31,6 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-filegroup(
-    name = "artifact_registry_iam_module",
-    srcs = glob(["modules/artifact-registry-iam/*.tf"]),
-    visibility = ["//visibility:public"],
-)
-
 py_library(
     name = "verify_xmc_lib",
     srcs = ["verify_xmc.py"],

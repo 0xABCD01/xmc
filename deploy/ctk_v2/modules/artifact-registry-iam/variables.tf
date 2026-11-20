@@ -15,21 +15,20 @@
 variable "image_registry" {
   description = "Target Artifact Registry Docker repository URI (<LOCATION>-docker.pkg.dev/<PROJECT_ID>/<REPO>)."
   type        = string
-  default     = ""
   nullable    = false
-}
 
-variable "enable_node_sa_binding" {
-  description = "Whether to grant repository reader access to node_service_account_email."
-  type        = bool
-  default     = false
-  nullable    = false
+  validation {
+    condition = can(regex(
+      "^[a-z0-9-]+-docker\\.pkg\\.dev/[^/]+/[^/]+(/.*)?$",
+      trimspace(var.image_registry),
+    ))
+    error_message = "image_registry must be a non-empty Artifact Registry Docker URI '<LOCATION>-docker.pkg.dev/<PROJECT_ID>/<REPO>'."
+  }
 }
 
 variable "node_service_account_email" {
-  description = "Cluster node pool GCP service account email granted Artifact Registry reader access when enable_node_sa_binding is true."
+  description = "Cluster node pool GCP service account email granted Artifact Registry repository reader access."
   type        = string
-  default     = ""
   nullable    = false
 }
 

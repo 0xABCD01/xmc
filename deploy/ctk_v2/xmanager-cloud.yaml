@@ -97,7 +97,6 @@ deployment_groups:
     source: community/modules/project/service-enablement
     settings:
       gcp_service_list: '$(concat([
-        "artifactregistry.googleapis.com",
         "compute.googleapis.com",
         "container.googleapis.com",
         "redis.googleapis.com",
@@ -264,8 +263,7 @@ deployment_groups:
         "logging.logWriter",
         "monitoring.metricWriter",
         "monitoring.viewer",
-        "stackdriver.resourceMetadata.writer",
-        "storage.objectViewer"
+        "stackdriver.resourceMetadata.writer"
       ], vars.enable_managed_mldiagnostics ? ["storage.objectAdmin"] : []))'
 
   - id: artifact_registry_reader_iam
@@ -273,7 +271,6 @@ deployment_groups:
     use: [node_pool_service_account]
     settings:
       image_registry: $(vars.image_registry)
-      enable_node_sa_binding: true
       node_service_account_email: $(node_pool_service_account.service_account_email)
       reader_service_accounts: $(vars.reader_service_accounts)
 

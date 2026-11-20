@@ -192,6 +192,13 @@ Execute the deployment to begin provisioning:
 ```
 Type `a` and press Enter to approve the rollout of each group when prompted by the CLI.
 
+> [!NOTE]
+> **Upgrading Existing Deployments (`compute_cluster` Node Pool Service Account & Repository-Scoped Artifact Registry IAM)**:
+> - `compute_cluster` now runs its `system` node pool as `node_pool_service_account` (`xmc-np-sa`) instead of `workload_service_account` (`xmc-wl-sa`), and `roles/artifactregistry.reader` is granted at repository scope (`image_registry`) via `artifact_registry_reader_iam` in group `compute` rather than project-wide on `xmc-wl-sa` and `xmc-np-sa`.
+> - Because `system_node_pools.node_config.service_account` is `ForceNew` in the Cluster Toolkit `gke-cluster` module, the next full `gcluster deploy` on an existing deployment will **delete and recreate the `system` node pool** (the GKE cluster resource itself is unaffected).
+> - When upgrading infrastructure groups, run group `compute` immediately after group `primary` so the transient image-pull window (after `primary` drops project-wide `artifactregistry.reader` from `xmc-wl-sa` and while `compute` switches the `system` node pool to `xmc-np-sa` and applies the repository-scoped IAM binding) is minimized.
+> - `tools/dev_env/dev_env.py gke-upgrade` (`tools/dev_env/upgrade_dev_env.py`) runs `--only xmc_app`, so upgraded environments retain existing IAM grants and the old `system` pool service account until a full `gcluster deploy` runs.
+
 ---
 
 ## 🧹 Phase 3: How to Destroy

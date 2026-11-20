@@ -96,6 +96,7 @@ The XMC services require OCI container images built from the codebase. You must 
    image_registry: "<LOCATION>-docker.pkg.dev/<PROJECT_ID>/xmc"
    image_tag: "<IMAGE_TAG>"
    ```
+   > **Note on Experiment Images (`image_registry` Repository Scope)**: Cluster Toolkit v2 grants `xmc-np-sa` (and any `reader_service_accounts`) `roles/artifactregistry.reader` scoped specifically to the Artifact Registry repository parsed from `image_registry` (`<LOCATION>-docker.pkg.dev/<PROJECT_ID>/<REPO>`). Experiment container images (including `examples/*/launch.py` and `deploy/cli/launch.py`, which default to `us-docker.pkg.dev/<PROJECT_ID>/xmc/...`) must either be pushed to that same `image_registry` repository or have `roles/artifactregistry.reader` granted to `xmc-np-sa` on any additional Artifact Registry repositories.
 
 6. **Grant Artifact Registry repository reader access to external GKE node service accounts** (host cluster node pools in Cluster Toolkit v2 use `xmc-np-sa` automatically; required only for external MultiKueue worker clusters or standalone Helm deployments):
    GKE kubelets pull container images using the **node's IAM service account** rather than the pod's Workload Identity service account. Provision GKE Standard node pools and GKE Autopilot clusters with a dedicated custom node IAM service account (`gcloud container clusters create-auto ... --service-account=<NODE_SA_EMAIL>` or `ComputeClass` `spec.nodePoolConfig.serviceAccount`) rather than the Compute Engine default service account:

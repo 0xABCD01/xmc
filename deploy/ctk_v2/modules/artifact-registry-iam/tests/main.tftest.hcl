@@ -14,33 +14,11 @@
 
 mock_provider "google" {}
 
-run "empty_image_registry_is_noop" {
-  command = plan
-
-  variables {
-    image_registry             = ""
-    enable_node_sa_binding     = true
-    node_service_account_email = "xmc-np-sa@host-proj.iam.gserviceaccount.com"
-    reader_service_accounts    = []
-  }
-
-  assert {
-    condition     = length(google_artifact_registry_repository_iam_member.node_pool_reader) == 0
-    error_message = "Expected no node_pool_reader binding when image_registry is empty."
-  }
-
-  assert {
-    condition     = length(google_artifact_registry_repository_iam_member.additional_readers) == 0
-    error_message = "Expected no additional_readers bindings when image_registry is empty."
-  }
-}
-
 run "valid_artifact_registry_binds_node_and_additional_readers" {
   command = plan
 
   variables {
     image_registry             = "us-west1-docker.pkg.dev/reg-proj/xmc/subpath"
-    enable_node_sa_binding     = true
     node_service_account_email = "xmc-np-sa@host-proj.iam.gserviceaccount.com"
     reader_service_accounts = [
       "worker-np-sa@worker-a.iam.gserviceaccount.com",
@@ -75,11 +53,38 @@ run "valid_artifact_registry_binds_node_and_additional_readers" {
   }
 }
 
+run "rejects_empty_image_registry" {
+  command = plan
+
+  variables {
+    image_registry             = ""
+    node_service_account_email = "xmc-np-sa@host-proj.iam.gserviceaccount.com"
+  }
+
+  expect_failures = [
+    var.image_registry,
+  ]
+}
+
+run "rejects_non_artifact_registry_uri" {
+  command = plan
+
+  variables {
+    image_registry             = "gcr.io/reg-proj/xmc"
+    node_service_account_email = "xmc-np-sa@host-proj.iam.gserviceaccount.com"
+  }
+
+  expect_failures = [
+    var.image_registry,
+  ]
+}
+
 run "rejects_default_compute_service_account" {
   command = plan
 
   variables {
-    image_registry = "us-west1-docker.pkg.dev/reg-proj/xmc"
+    image_registry             = "us-west1-docker.pkg.dev/reg-proj/xmc"
+    node_service_account_email = "xmc-np-sa@host-proj.iam.gserviceaccount.com"
     reader_service_accounts = [
       "123456789012-compute@developer.gserviceaccount.com",
     ]
@@ -94,7 +99,8 @@ run "rejects_service_account_prefix" {
   command = plan
 
   variables {
-    image_registry = "us-west1-docker.pkg.dev/reg-proj/xmc"
+    image_registry             = "us-west1-docker.pkg.dev/reg-proj/xmc"
+    node_service_account_email = "xmc-np-sa@host-proj.iam.gserviceaccount.com"
     reader_service_accounts = [
       "serviceAccount:worker-np-sa@worker-a.iam.gserviceaccount.com",
     ]
