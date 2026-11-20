@@ -151,9 +151,10 @@ ESS then writes all work units in one transaction
 checks the caller against the `hpo` component again, reads the experiment once, allocates the IDs with a
 single next-ID read, inserts the work units in one write, and updates the experiment's denormalized
 status and resources once. After the commit it records one creation operation per work unit and
-enqueues each creation task. A work unit whose operation or task cannot be created gets the `FATAL`
-status message `CreateWorkUnit` uses on enqueue failure (`CreateWorkUnit` does not mark `FATAL` if
-operation creation fails); ESS writes these messages for all such work units in one transaction.
+enqueues all creation tasks in one pipelined Redis round trip. A work unit whose operation or task
+cannot be created gets the `FATAL` status message `CreateWorkUnit` uses on enqueue failure
+(`CreateWorkUnit` does not mark `FATAL` if operation creation fails); ESS writes these messages for
+all such work units in one transaction.
 Then any already-recorded `Operation` for such a work unit is marked `Done` with `INTERNAL`, and the RPC
 returns `INTERNAL` naming those work units; the other work units are scheduled. This cleanup runs
 even if the caller cancels the RPC, bounded by its own timeout. Because the trials are already
