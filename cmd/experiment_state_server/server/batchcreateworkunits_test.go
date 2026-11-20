@@ -43,7 +43,8 @@ const batchParent = "experiments/123"
 
 // batchStorage counts transactions, records one operation per AddWorkUnitOperation call, and keeps
 // the inserted work units so that status updates of created work units land. Like the real
-// backends, its transactions and operation updates fail once their context is done.
+// backends, its transactions and operation updates fail once their context is done. It also
+// records, per stopped operation, whether its work unit was already marked FATAL.
 type batchStorage struct {
 	*storage.MockStorage
 	txCalls    int
@@ -52,6 +53,9 @@ type batchStorage struct {
 	operationErrs map[string]error
 	// workUnits holds the inserted work units by ID.
 	workUnits map[int64]*msgpb.WorkUnit
+	// fatalWhenStopped maps the ID of each work unit whose operation was updated to whether its
+	// FATAL system message was already persisted at that point.
+	fatalWhenStopped map[int64]bool
 }
 
 func (s *batchStorage) RunInTransaction(ctx context.Context, fn func(ctx context.Context, tx *storage.Transaction) error) error {
@@ -94,6 +98,11 @@ func (s *batchStorage) UpdateWorkUnitOperation(ctx context.Context, update *stor
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if s.fatalWhenStopped == nil {
+		s.fatalWhenStopped = make(map[int64]bool)
+	}
+	exec := s.UpdatedWorkUnitExecutions[update.WID]
+	s.fatalWhenStopped[update.WID] = exec.GetStatus().GetSystemMessage().GetSeverity() == msgpb.StructuredMessage_FATAL
 	return s.MockStorage.UpdateWorkUnitOperation(ctx, update)
 }
 
@@ -312,9 +321,9 @@ func recordedSystemMessages(st *batchStorage) map[int64]*msgpb.StructuredMessage
 	return got
 }
 
-// checkCompensation checks that exactly the work units wantFATAL got the unschedulable message and
-// that the last stopped operation, if wantStoppedWID is not 0, belongs to that work unit, is done
-// and carries an Internal error.
+// checkCompensation checks that exactly the work units wantFATAL got the unschedulable message,
+// before any of their operations was stopped, and that the last stopped operation, if
+// wantStoppedWID is not 0, belongs to that work unit, is done and carries an Internal error.
 func checkCompensation(t *testing.T, st *batchStorage, wantFATAL []int64, wantStopped int, wantStoppedWID int64) {
 	t.Helper()
 	want := make(map[int64]*msgpb.StructuredMessage, len(wantFATAL))
@@ -328,6 +337,11 @@ func checkCompensation(t *testing.T, st *batchStorage, wantFATAL []int64, wantSt
 	}
 	if st.UpdateWorkUnitOperationCalls != wantStopped {
 		t.Errorf("stopped operations = %d, want %d", st.UpdateWorkUnitOperationCalls, wantStopped)
+	}
+	for _, wid := range wantFATAL {
+		if fatal, stopped := st.fatalWhenStopped[wid]; stopped && !fatal {
+			t.Errorf("operation of work unit %d was stopped before its FATAL message was persisted", wid)
+		}
 	}
 	if wantStoppedWID == 0 {
 		return

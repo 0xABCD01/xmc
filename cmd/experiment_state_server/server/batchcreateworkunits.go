@@ -209,9 +209,11 @@ func (h *WorkUnitHandler) addCreateOperation(ctx context.Context, xid int64, wu 
 }
 
 // compensateFailedWorkUnits records a FATAL system message on every failed work unit whose ID and
-// execution name are known, in a single write, and stops the operation of every failed work unit
-// that has one. It runs under a cleanup context detached from ctx, so that a cancelled RPC still
-// compensates the work units it already committed. It returns the names of the failed work units.
+// execution name are known, in a single write, and then stops the operation of every failed work
+// unit that has one. It runs under a cleanup context detached from ctx, so that a cancelled RPC
+// still compensates the work units it already committed. The FATAL write goes first, so that slow
+// per-work-unit operation stops cannot use up the cleanup budget before it. It returns the names of
+// the failed work units.
 func (h *WorkUnitHandler) compensateFailedWorkUnits(ctx context.Context, xid int64, failed []failedWorkUnit) []string {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), batchActuationCleanupTimeout)
 	defer cancel()
@@ -223,15 +225,16 @@ func (h *WorkUnitHandler) compensateFailedWorkUnits(ctx context.Context, xid int
 		if update := unschedulableUpdateOf(ctx, f.createdWorkUnit); update != nil {
 			updates = append(updates, update)
 		}
+	}
+	if len(updates) > 0 {
+		if _, err := h.workUnitUpdater.UpdateWorkUnitExecutions(cleanupCtx, xid, updates); err != nil {
+			logging.Error(ctx, "Failed to mark work units unschedulable", "count", len(updates), "error", err)
+		}
+	}
+	for _, f := range failed {
 		if f.operation != nil {
 			h.stopOperationOnError(cleanupCtx, f.operation, fmt.Errorf("failed to enqueue work unit for scheduling: %v: %w", f.cause, grpcerr.ErrInternal))
 		}
-	}
-	if len(updates) == 0 {
-		return names
-	}
-	if _, err := h.workUnitUpdater.UpdateWorkUnitExecutions(cleanupCtx, xid, updates); err != nil {
-		logging.Error(ctx, "Failed to mark work units unschedulable", "count", len(updates), "error", err)
 	}
 	return names
 }
