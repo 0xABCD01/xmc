@@ -42,6 +42,8 @@ class ParseMigrationVersionTest(unittest.TestCase):
             (f"{POSTGRES_DIR}/020_work_unit_trial_fields.up.sql", 20),
             ("100_big_change.up.sql", 100),
             ("000_zero.up.sql", 0),
+            ("021_café_日本語.up.sql", 21),
+            ("021_bad_\ufffd.up.sql", 21),
         )
         for path, expected in cases:
             with self.subTest(path=path):
@@ -49,6 +51,7 @@ class ParseMigrationVersionTest(unittest.TestCase):
 
     def test_ignores_non_migration_filenames(self) -> None:
         ignored = (
+            "",
             f"{SPANNER_DIR}/README.md",
             f"{SPANNER_DIR}/BUILD.bazel",
             f"{SPANNER_DIR}/notes.sql",
@@ -391,6 +394,173 @@ class CheckMigrationOrderIntegrationTest(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["error_type"], "handled")
         self.assertEqual(len(payload["details"]["violations"]), 1)
+
+    def test_duplicate_versions_above_base_max_reports_accurate_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._make_fake_repo(tmpdir)
+            responses = [
+                subprocess.CompletedProcess([], 0, stdout="deadbeef\n", stderr=""),
+                subprocess.CompletedProcess(
+                    [], 0, stdout=f"{SPANNER_DIR}/020_a.up.sql\0", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=(
+                        f"{SPANNER_DIR}/020_a.up.sql\0"
+                        f"{SPANNER_DIR}/021_foo.up.sql\0"
+                        f"{SPANNER_DIR}/021_bar.up.sql\0"
+                    ),
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    [], 0, stdout=f"{POSTGRES_DIR}/020_a.up.sql\0", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    [], 0, stdout=f"{POSTGRES_DIR}/020_a.up.sql\0", stderr=""
+                ),
+            ]
+            args = argparse.Namespace(repo_root=str(root), base_ref="origin/main", dirs=None)
+            with (
+                mock.patch.object(cli, "run_command", side_effect=responses),
+                self.assertRaises(HandledError) as cm,
+            ):
+                cli.check_migration_order(args)
+
+        self.assertIn("duplicate-version migration", cm.exception.message)
+        self.assertNotIn("version <= max", cm.exception.message)
+        self.assertIn("unique version number", cm.exception.instruction)
+
+    def test_mixed_out_of_order_and_duplicate_reports_combined_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._make_fake_repo(tmpdir)
+            responses = [
+                subprocess.CompletedProcess([], 0, stdout="deadbeef\n", stderr=""),
+                subprocess.CompletedProcess(
+                    [], 0, stdout=f"{SPANNER_DIR}/020_a.up.sql\0", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=(
+                        f"{SPANNER_DIR}/020_a.up.sql\0"
+                        f"{SPANNER_DIR}/019_old.up.sql\0"
+                        f"{SPANNER_DIR}/021_foo.up.sql\0"
+                        f"{SPANNER_DIR}/021_bar.up.sql\0"
+                    ),
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    [], 0, stdout=f"{POSTGRES_DIR}/020_a.up.sql\0", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    [], 0, stdout=f"{POSTGRES_DIR}/020_a.up.sql\0", stderr=""
+                ),
+            ]
+            args = argparse.Namespace(repo_root=str(root), base_ref="origin/main", dirs=None)
+            with (
+                mock.patch.object(cli, "run_command", side_effect=responses),
+                self.assertRaises(HandledError) as cm,
+            ):
+                cli.check_migration_order(args)
+
+        self.assertIn("ordering/duplicate-version", cm.exception.message)
+        self.assertIn("unique version strictly above", cm.exception.instruction)
+
+
+class RealGitIntegrationTest(unittest.TestCase):
+    """Hermetic integration tests exercising real git subprocess invocations."""
+
+    def _init_git_repo(self, tmpdir: str) -> Path:
+        root = Path(tmpdir)
+        subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        for mig_dir in (SPANNER_DIR, POSTGRES_DIR):
+            full_dir = root / mig_dir
+            full_dir.mkdir(parents=True)
+            (full_dir / "020_base.up.sql").write_text("-- base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial migrations"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        return root
+
+    def test_valid_staged_addition_and_untracked_sql_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._init_git_repo(tmpdir)
+            (root / SPANNER_DIR / "021_new_feature.up.sql").write_text("-- ok\n", encoding="utf-8")
+            (root / SPANNER_DIR / "010_untracked_scratch.up.sql").write_text(
+                "-- untracked\n", encoding="utf-8"
+            )
+            subprocess.run(
+                ["git", "add", f"{SPANNER_DIR}/021_new_feature.up.sql"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            args = argparse.Namespace(repo_root=str(root), base_ref="main", dirs=None)
+            result = cli.check_migration_order(args)
+
+        self.assertEqual(result["violations"], 0)
+        self.assertEqual(result["checked_dirs"][SPANNER_DIR], {"base_max": 20, "added_files": 1})
+
+    def test_rejects_staged_out_of_order_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._init_git_repo(tmpdir)
+            (root / POSTGRES_DIR / "020_conflict.up.sql").write_text("-- bad\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", f"{POSTGRES_DIR}/020_conflict.up.sql"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            args = argparse.Namespace(repo_root=str(root), base_ref="main", dirs=None)
+            with self.assertRaises(HandledError) as cm:
+                cli.check_migration_order(args)
+
+        self.assertIn("1 out-of-order migration", cm.exception.message)
+        assert cm.exception.details is not None
+        self.assertEqual(cm.exception.details["violations"][0]["kind"], "out_of_order")
+
+    def test_unresolvable_base_ref_raises_handled_error_with_pure_json_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = self._init_git_repo(tmpdir)
+            stderr_buf = io.StringIO()
+            with (
+                mock.patch(
+                    "sys.argv",
+                    [
+                        "check_migration_order.py",
+                        "--repo-root",
+                        str(root),
+                        "--base-ref",
+                        "origin/does-not-exist",
+                    ],
+                ),
+                mock.patch("sys.stderr", stderr_buf),
+                self.assertRaises(SystemExit) as cm,
+            ):
+                cli.main()
+
+        self.assertEqual(cm.exception.code, 1)
+        payload = json.loads(stderr_buf.getvalue())
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["error_type"], "handled")
+        self.assertIn("origin/does-not-exist", payload["instruction"])
 
 
 if __name__ == "__main__":

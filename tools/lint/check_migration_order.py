@@ -72,6 +72,7 @@ def _build_violation(
     path: str,
     version: int,
     base_max: int,
+    kind: str,
     reason: str,
 ) -> dict[str, Any]:
     """Construct a structured migration-ordering violation entry."""
@@ -80,6 +81,7 @@ def _build_violation(
         "path": path,
         "version": version,
         "base_max": base_max,
+        "kind": kind,
         "reason": reason,
     }
 
@@ -102,6 +104,7 @@ def _check_added_path(
             path,
             version,
             base_max,
+            "duplicate_version",
             f"Duplicate migration version {version} detected with different names: "
             f"{', '.join(sorted(bases))}.",
         )
@@ -111,6 +114,7 @@ def _check_added_path(
             path,
             version,
             base_max,
+            "out_of_order",
             f"Added migration version {version} must be strictly greater than "
             f"max version {base_max} on base ref.",
         )
@@ -217,19 +221,10 @@ def _validate_repo_and_base(
 
 def _list_base_paths(repo_root: Path, base_ref: str, migration_dir: str) -> list[str]:
     """List repository-relative paths under ``migration_dir`` at ``base_ref``."""
+    git_args = ["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", "-z", base_ref]
     stdout = _run_git(
         repo_root,
-        [
-            "-c",
-            "core.quotePath=false",
-            "ls-tree",
-            "-r",
-            "--name-only",
-            "-z",
-            base_ref,
-            "--",
-            migration_dir,
-        ],
+        [*git_args, "--", migration_dir],
         handled_instruction=f"Failed to list '{migration_dir}' at base ref '{base_ref}'.",
     )
     return [entry for entry in stdout.split("\0") if entry]
@@ -245,6 +240,33 @@ def _list_current_paths(repo_root: Path, migration_dir: str) -> list[str]:
     return [entry for entry in stdout.split("\0") if entry]
 
 
+def _build_violation_error(
+    base_ref: str,
+    checked_dirs: dict[str, dict[str, int]],
+    violations: list[dict[str, Any]],
+) -> HandledError:
+    """Build a HandledError whose message and instruction match violation kinds."""
+    count = len(violations)
+    kinds = {v["kind"] for v in violations}
+    lockstep = "(keeping Spanner and PostgreSQL versions in lockstep)."
+    if kinds == {"duplicate_version"}:
+        msg = f"Found {count} duplicate-version migration file(s) added in this change."
+        instr = f"Assign each newly added migration a unique version number {lockstep}"
+    elif kinds == {"out_of_order"}:
+        msg = f"Found {count} out-of-order migration file(s) (version <= max on '{base_ref}')."
+        instr = f"Renumber added migration(s) strictly above max on '{base_ref}' {lockstep}"
+    else:
+        msg = (
+            f"Found {count} migration ordering/duplicate-version violation(s) against '{base_ref}'."
+        )
+        instr = f"Assign each added migration a unique version strictly above max on '{base_ref}' {lockstep}"
+    return HandledError(
+        msg,
+        instr,
+        details={"base_ref": base_ref, "checked_dirs": checked_dirs, "violations": violations},
+    )
+
+
 def check_migration_order(args: argparse.Namespace) -> dict[str, Any]:
     """Verify no added ESS migration has a version ``<=`` the base ref maximum.
 
@@ -258,7 +280,8 @@ def check_migration_order(args: argparse.Namespace) -> dict[str, Any]:
 
     Raises:
         HandledError: If repository/base validation fails or any added migration
-            is numbered ``<=`` the maximum version on ``base_ref``.
+            is numbered ``<=`` the maximum version on ``base_ref`` or duplicates
+            another added migration's version.
     """
     repo_root = Path(args.repo_root).resolve()
     raw_dirs = args.dirs if args.dirs else DEFAULT_MIGRATION_DIRS
@@ -278,17 +301,7 @@ def check_migration_order(args: argparse.Namespace) -> dict[str, Any]:
         all_violations.extend(violations)
 
     if all_violations:
-        raise HandledError(
-            f"Found {len(all_violations)} out-of-order migration file(s) "
-            f"(version <= max on '{args.base_ref}').",
-            "Renumber the added migration(s) strictly above the max version on "
-            f"'{args.base_ref}' (keeping Spanner and PostgreSQL versions in lockstep).",
-            details={
-                "base_ref": args.base_ref,
-                "checked_dirs": checked_dirs,
-                "violations": all_violations,
-            },
-        )
+        raise _build_violation_error(args.base_ref, checked_dirs, all_violations)
     return {
         "base_ref": args.base_ref,
         "checked_dirs": checked_dirs,
@@ -297,35 +310,19 @@ def check_migration_order(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser.
-
-    Returns:
-        Configured ArgumentParser instance.
-    """
+    """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
-        description=(
-            "Reject added ESS migrations whose version number is <= the max "
-            "migration version on the base ref."
-        ),
+        description="Reject added ESS migrations with version <= max on the base ref.",
     )
+    parser.add_argument("--repo-root", default=str(_REPO_ROOT), help="Repository root directory.")
     parser.add_argument(
-        "--repo-root",
-        default=str(_REPO_ROOT),
-        help="Repository root directory.",
-    )
-    parser.add_argument(
-        "--base-ref",
-        default="origin/main",
-        help="Git ref representing the target branch (default: origin/main).",
+        "--base-ref", default="origin/main", help="Target branch git ref (default: origin/main)."
     )
     parser.add_argument(
         "--dir",
         action="append",
         dest="dirs",
-        help=(
-            "Migration directory relative to repo root (repeatable; defaults to "
-            "Spanner and PostgreSQL ESS migration directories)."
-        ),
+        help="Migration dir relative to repo root (repeatable; defaults to ESS migration dirs).",
     )
     return parser
 
