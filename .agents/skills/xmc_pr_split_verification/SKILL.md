@@ -30,7 +30,7 @@ graph TD
         S --> I["4. Test Reachability: Every slice fully tested"]
     end
     
-    F & G & H & I --> K["Propose best gh-stack Plan with per-layer sizes and residual overage"]
+    F & G & H & I --> K["Propose best gh-stack Plan with per-layer sizes and residual overage & Present to User"]
     J -->|Yes| L["Primary: Exception Justification (optional zero-cost split as alternative) & Ask User Approval"]
     
     K --> M["Execute gh-stack Workflow"]
@@ -83,7 +83,7 @@ Entrypoints (function bodies or file:symbol paths of every new or extended handl
 
 Your Task:
 1. Conduct a strict Single Responsibility Principle (SRP) audit of the changes.
-2. First check Pillar 4; if it matches, skip the Step Ladder. Otherwise, for every entrypoint above, produce the Step Ladder table FIRST (ordered steps, core vs deferrable depth, assigned slice) per Pillar 2 "Progressive Entrypoint Depth (Step Ladder)".
+2. Before the Step Ladder, check Pillar 4; if it matches, skip the Step Ladder. Otherwise, for every entrypoint above, produce the Step Ladder table FIRST (ordered steps, core vs deferrable depth, assigned slice) per Pillar 2 "Progressive Entrypoint Depth (Step Ladder)".
 3. Then derive your own split candidates. Prioritize VERTICAL SPLITS (by end-to-end user flow or functional depth) over horizontal architectural layers (DB vs API vs UI).
 4. Verify the Dead Code & Reachability Invariant: Intermediate PRs MUST NOT introduce dead, uncalled, or unreachable code (disclosed stepping stones are allowed). Every slice must be independently tested via unit/integration/E2E tests.
 5. Produce your best split as a concrete `gh-stack` execution plan with branch names, commit messages, file allocations, and measured production/test lines per layer, plus any residual overage.
@@ -105,11 +105,11 @@ The verification subagent must evaluate the diff against the following four core
 ### Pillar 2: Dead Code & Test Reachability Invariant
 * **Production Caller Required**: Every intermediate or standalone PR merged to `main` MUST have an active production call site. Submitting uncalled helpers, orphaned utilities, or unused classes (even with 100% unit tests in a planned stack) is prohibited because stacks can stall or change, leaving dead code in `main`.
 * **Standalone Entrypoint Exception**: Self-contained executable entrypoints (such as scaffolding a new CLI tool under `cmd/`, a new service binary, or a standalone utility under `tools/`) are permitted without external callers because they are directly runnable and testable on their own.
-* **Progressive Entrypoint Depth (Step Ladder)**: Decompose oversized work by functional depth rather than by structural layers. When a diff adds or extends **any entrypoint** (RPC/HTTP handler, controller reconcile loop, queue consumer, CLI, binary, or large driver), agents MUST NOT treat it as an indivisible monolithic exception. The ladder covers only runtime entrypoints whose behaviour the diff adds or changes; build files, lint/ESLint configs, type declarations, and bootstrap imports are not entrypoints. Skip it when the diff matches a Pillar 4 category. Build a **Step Ladder** table before proposing candidates:
+* **Progressive Entrypoint Depth (Step Ladder)**: Decompose oversized work by functional depth rather than by structural layers. When a diff adds or extends **any entrypoint** (RPC/HTTP handler, controller reconcile loop, queue consumer, CLI, binary, or large driver), agents MUST NOT treat it as an indivisible monolithic exception. The ladder covers only runtime entrypoints whose behavior the diff adds or changes; build files, lint/ESLint configs, type declarations, and bootstrap imports are not entrypoints. Skip it when the diff matches a Pillar 4 category. Build a **Step Ladder** table before proposing candidates:
   1. List the entrypoint's ordered steps, e.g. authn → authz → input safety → type/state checks → full validation → assembly/enrichment → persistence → primary side effect → partial-failure recovery → performance optimizations (bulk writes, caching, pipelining).
   2. Classify each step as *core* (authn/authz, minimal input safety, persistence, primary side effect) or *deferrable depth* (full validation, assembly/enrichment, partial-failure recovery, retries, performance optimizations). Deferrable depth is the default: reclassifying one as core requires naming the never-deferrable category (authn/authz, data integrity, secrets) it falls under. "Weaker intermediate state" or "correctness regression" is not a valid reason when Intermediate-Layer Contract condition (a) holds.
   3. Assign each step to a slice. Slice 1 is the smallest callable path; each later slice adds depth and stays end-to-end callable and tested, with zero dead code in trunk. For example, a batch-create RPC handler can ship as Slice 1: authn/authz + minimal checks + per-row insert; Slice 2: full validation; Slice 3: partial-failure recovery; Slice 4: a single bulk write.
-* **Intermediate-Layer Contract**: Behavioural contracts (full validation, failure parity, performance targets) bind the stack **tip**, not each layer. An intermediate layer may lack deferrable depth when (a) the feature is unlaunched, flagged, or EXPERIMENTAL, or the entrypoint is restricted to a trusted caller, **and** (b) its PR body lists every gap and the layer that closes it. Never deferrable: authentication and authorization, data-integrity invariants (IDs, constraints, schema migrations), and secret handling.
+* **Intermediate-Layer Contract**: Behavioral contracts (full validation, failure parity, performance targets) bind the stack **tip**, not each layer. An intermediate layer may lack deferrable depth when (a) the feature is unlaunched, flagged, or EXPERIMENTAL, or the entrypoint is restricted to a trusted caller, **and** (b) its PR body lists every gap and the layer that closes it. Never deferrable: authentication and authorization, data-integrity invariants (IDs, constraints, schema migrations), and secret handling.
 * **Stepping Stones Are Not Dead Code**: Called, tested code that a later slice of the same stack replaces (up to about 20 production lines, e.g. a per-row insert loop later replaced by a bulk write) is allowed. Disclose each stepping stone and its replacing layer in the PR body. Rejecting a disclosed stepping stone of ≤20 lines as "throwaway" or "churn" is not allowed.
 * **End-to-End Testability**: Each slice must pass local test matrices (`bazel test //...`) and include dedicated unit/integration tests exercising the new functionality.
 
@@ -171,7 +171,7 @@ Present the subagent's findings to the user. Do NOT split branches or open PRs w
 If no split brings every layer under threshold, still present Scenario A with the best split, the measured sizes per layer, and the residual overage for the user to accept.
 
 ### Scenario B: Exception Justification
-Valid **only** when the diff matches a Pillar 4 category. Otherwise use Scenario A. When it matches, Scenario B is the primary outcome; a zero-cost split along existing commit or domain boundaries may be appended after it, labelled as an optional alternative.
+Valid **only** when the diff matches a Pillar 4 category. Otherwise use Scenario A. When it matches, Scenario B is the primary outcome; a zero-cost split along existing commit or domain boundaries may be appended after it, labeled as an optional alternative.
 
 > *"The proposed changes total **<total_code_lines> lines**, exceeding the PR sizing threshold.*
 > 
