@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/redis/go-redis/v9"
 	"github.com/tink-crypto/tink-go/v2/jwt"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -613,6 +614,50 @@ func TestNew_DefaultTokenProvider(t *testing.T) {
 		}
 		if c.tokenProvider == nil {
 			t.Errorf("tokenProvider is nil, want customProvider")
+		}
+	})
+}
+
+func TestNew_RedisPublisher(t *testing.T) {
+	keyFunc := securitytest.MustCreateTestSigner(t)
+	tests := []struct {
+		name                      string
+		opts                      []Option
+		wantContextTimeoutEnabled bool
+	}{
+		{name: "context timeouts are off by default"},
+		{name: "WithRedisContextTimeout opts in", opts: []Option{WithRedisContextTimeout()}, wantContextTimeoutEnabled: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := New(t.Context(), "project", "sa", "http://actuator", "", keyFunc, 3600, "redis-service:6379", tc.opts...)
+			if err != nil {
+				t.Fatalf("New() failed: %v", err)
+			}
+			defer c.Close()
+			publisher, ok := c.redisClient.(*redisclient.PublisherClient)
+			if !ok {
+				t.Fatalf("redisClient is %T, want *redisclient.PublisherClient", c.redisClient)
+			}
+			client, ok := publisher.Client.(*redis.Client)
+			if !ok {
+				t.Fatalf("publisher client is %T, want *redis.Client", publisher.Client)
+			}
+			if got := client.Options().ContextTimeoutEnabled; got != tc.wantContextTimeoutEnabled {
+				t.Errorf("ContextTimeoutEnabled = %t, want %t", got, tc.wantContextTimeoutEnabled)
+			}
+		})
+	}
+
+	t.Run("WithRedisPublisher takes precedence", func(t *testing.T) {
+		fake := redisclient.NewFakeClient()
+		c, err := New(t.Context(), "project", "sa", "http://actuator", "", keyFunc, 3600, "redis-service:6379", WithRedisContextTimeout(), WithRedisPublisher(fake))
+		if err != nil {
+			t.Fatalf("New() failed: %v", err)
+		}
+		defer c.Close()
+		if c.redisClient != fake {
+			t.Errorf("redisClient = %T, want the WithRedisPublisher publisher", c.redisClient)
 		}
 	})
 }
