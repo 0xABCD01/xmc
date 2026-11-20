@@ -18,7 +18,19 @@ on:
   pull_request:
   merge_group:
   workflow_call:
+    inputs:
+      cache-test-results:
+        description: 'Reuse cached Bazel test results; false executes every backend test (--nocache_test_results)'
+        type: boolean
+        required: false
+        default: true
   workflow_dispatch:
+    inputs:
+      cache-test-results:
+        description: 'Reuse cached Bazel test results; false executes every backend test (--nocache_test_results)'
+        type: boolean
+        required: false
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}-v2-${{ github.event.pull_request.number || github.head_ref || github.run_id }}
@@ -55,6 +67,9 @@ jobs:
 
       - name: 'Run Backend Unit Tests'
         uses: './.github/actions/run-backend-tests'
+        with:
+          # inputs is empty for pull_request and merge_group, so only an explicit false disables the cache.
+          cache-test-results: ${{ inputs.cache-test-results == false && 'false' || 'true' }}
 
   run-ui-tests:
     name: 'Run Angular UI Unit Tests'

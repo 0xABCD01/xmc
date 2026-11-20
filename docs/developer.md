@@ -231,10 +231,11 @@ To test one directory, run `bazel test //<dir>/...`. To list its test targets, r
 
 [![XMC Unit Tests](https://github.com/google/xmc/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/google/xmc/actions/workflows/unit-tests.yml)
 
-Automated unit test suites and code quality checks are executed on:
-* **Pull Requests** targeting any branch.
-* **Direct Pushes** to the `test` (main baseline) and `feature/unit_tests_action` branches.
-* **Manual Dispatch** (`workflow_dispatch`) via the GitHub Actions UI.
+Automated unit test suites ([`.github/workflows/unit-tests.yml`](../.github/workflows/unit-tests.yml)) and code quality checks are executed on:
+* **Pull Requests** and the **merge queue**, scoped to the targets affected by the change.
+* **Pushes to `main`** via the post-submit pipeline ([`.github/workflows/postsubmit-main.yml`](../.github/workflows/postsubmit-main.yml)), which runs the full suite but restores the Bazel disk cache, so unchanged tests report cached results instead of executing.
+* **Nightly** via [`.github/workflows/nightly-unit-tests.yml`](../.github/workflows/nightly-unit-tests.yml) (2:00 AM UTC), which runs the full suite on `main` with `--nocache_test_results` (build outputs stay cached) so every test executes, catching flaky or broken tests that cached post-submit runs hide. A failure on `main` opens (or comments on) a `nightly-unit-test-failure` issue and @-mentions available `OWNERS`.
+* **Manual Dispatch** (`workflow_dispatch`) via the GitHub Actions UI; set the `cache-test-results` input to `false` to execute every backend test (`gh workflow run unit-tests.yml --ref <branch> -f cache-test-results=false`).
 
 ---
 

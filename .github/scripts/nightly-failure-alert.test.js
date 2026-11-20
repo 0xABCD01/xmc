@@ -19,6 +19,9 @@ const path = require('path');
 const os = require('os');
 
 const {
+  ALERT_PROFILES,
+  resolveAlertProfile,
+  resolveJobResults,
   parseUsernames,
   filterActiveOwners,
   resolveActiveOwners,
@@ -826,4 +829,139 @@ describe('resolveTriggerOutcome', () => {
       assert.equal(resolveTriggerOutcome(needs), expected);
     });
   }
+});
+
+describe('resolveAlertProfile', () => {
+  test('defaults to the examples-e2e profile', () => {
+    assert.equal(resolveAlertProfile(undefined), ALERT_PROFILES['examples-e2e']);
+    assert.equal(resolveAlertProfile(''), ALERT_PROFILES['examples-e2e']);
+  });
+
+  test('returns the named profile', () => {
+    assert.equal(resolveAlertProfile('unit-tests'), ALERT_PROFILES['unit-tests']);
+  });
+
+  test('throws for an unknown profile name', () => {
+    assert.throws(() => resolveAlertProfile('nope'), /Unknown ALERT_PROFILE 'nope'; expected one of: examples-e2e, unit-tests/);
+  });
+
+  test('gives every profile a distinct issue label', () => {
+    const labels = Object.values(ALERT_PROFILES).map(p => p.labelName);
+    assert.equal(new Set(labels).size, labels.length);
+  });
+});
+
+describe('resolveJobResults', () => {
+  const cases = [
+    {
+      name: 'lists every job result in order',
+      needs: { 'unit-tests': { result: 'failure' }, other: { result: 'success' } },
+      expected: [['unit-tests', 'failure'], ['other', 'success']],
+    },
+    { name: 'reports unknown for a job without a result', needs: { 'unit-tests': {} }, expected: [['unit-tests', 'unknown']] },
+    { name: 'returns no rows for empty context', needs: {}, expected: [] },
+    { name: 'returns no rows for null context', needs: null, expected: [] },
+  ];
+  for (const { name, needs, expected } of cases) {
+    test(name, () => {
+      assert.deepEqual(resolveJobResults(needs), expected);
+    });
+  }
+});
+
+describe('unit-tests alert profile', () => {
+  const baseParams = {
+    owner: 'google',
+    repo: 'xmc',
+    runId: 42,
+    sha: 'abcdef1234567890abcdef1234567890abcdef12',
+    activeOwners: ['userA'],
+    profile: ALERT_PROFILES['unit-tests'],
+  };
+
+  test('formats job results instead of examples E2E fields', () => {
+    const body = formatFailureIssueBody({ ...baseParams, jobResults: [['unit-tests', 'failure']] });
+
+    assert.ok(body.startsWith('### 🧪 Nightly Uncached Unit Tests Failed'));
+    assert.ok(body.includes('--nocache_test_results'));
+    assert.ok(body.includes('| **unit-tests** | `failure` |'));
+    assert.ok(!body.includes('Experiment XID'));
+    assert.ok(!body.includes('Trigger Action'));
+    assert.ok(body.includes('cc @userA'));
+  });
+
+  test('reports unknown jobs when no job results are available', () => {
+    const body = formatFailureIssueBody(baseParams);
+    assert.ok(body.includes('| **Jobs** | `unknown` |'));
+  });
+
+  test('buildAlertParams carries the profile and job results', () => {
+    const context = { repo: { owner: 'google', repo: 'xmc' }, runId: 1, sha: baseParams.sha };
+    const params = buildAlertParams(context, [], null, { 'unit-tests': { result: 'failure' } }, ALERT_PROFILES['unit-tests']);
+    assert.equal(params.profile, ALERT_PROFILES['unit-tests']);
+    assert.deepEqual(params.jobResults, [['unit-tests', 'failure']]);
+  });
+
+  test('run files the alert under the unit-tests label and title', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-test-'));
+    const ownersFile = path.join(tempDir, 'OWNERS');
+    fs.writeFileSync(ownersFile, 'Alice\n');
+    const origNeedsContext = process.env.NEEDS_CONTEXT;
+    process.env.NEEDS_CONTEXT = JSON.stringify({ 'unit-tests': { result: 'failure' } });
+
+    let queriedLabel = null;
+    let createdIssue = null;
+    const mockGithub = {
+      rest: {
+        repos: { listPullRequestsAssociatedWithCommit: async () => ({ data: [] }) },
+        issues: {
+          listForRepo: async ({ labels }) => {
+            queriedLabel = labels;
+            return { data: [] };
+          },
+          create: async (payload) => {
+            createdIssue = payload;
+            return { data: { number: 7 } };
+          },
+        },
+      },
+    };
+    const mockContext = { repo: { owner: 'google', repo: 'xmc' }, runId: 9, sha: baseParams.sha, ref: 'refs/heads/main', eventName: 'schedule' };
+
+    try {
+      const result = await run({
+        github: mockGithub,
+        context: mockContext,
+        core: { info: () => {}, warning: () => {} },
+        ownersPath: ownersFile,
+        absenceContent: '',
+        profileName: 'unit-tests',
+      });
+
+      assert.deepEqual(result, { status: 'issue_created', issueNumber: 7 });
+      assert.equal(queriedLabel, 'nightly-unit-test-failure');
+      assert.deepEqual(createdIssue.labels, ['nightly-unit-test-failure', 'bug']);
+      assert.ok(createdIssue.title.startsWith('🚨 Nightly Uncached Unit Test Failure ('));
+      assert.ok(createdIssue.body.includes('| **unit-tests** | `failure` |'));
+      assert.ok(createdIssue.body.includes('@Alice'));
+    } finally {
+      if (origNeedsContext === undefined) delete process.env.NEEDS_CONTEXT;
+      else process.env.NEEDS_CONTEXT = origNeedsContext;
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('run reads the profile from process.env.ALERT_PROFILE when profileName is omitted', async () => {
+    const origProfile = process.env.ALERT_PROFILE;
+    process.env.ALERT_PROFILE = 'nope';
+    try {
+      await assert.rejects(
+        run({ github: {}, context: { repo: { owner: 'google', repo: 'xmc' } }, core: null }),
+        /Unknown ALERT_PROFILE 'nope'/
+      );
+    } finally {
+      if (origProfile === undefined) delete process.env.ALERT_PROFILE;
+      else process.env.ALERT_PROFILE = origProfile;
+    }
+  });
 });
