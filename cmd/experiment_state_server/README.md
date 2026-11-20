@@ -148,10 +148,14 @@ ESS then writes all work units in one transaction
 ([`internal/workunit/batchcreateworkunits.go`](../../internal/workunit/batchcreateworkunits.go)): it
 checks the caller against the `hpo` component again, reads the experiment once, allocates the IDs with a
 single next-ID read, inserts each work unit, and updates the experiment's denormalized
-status and resources once. After the commit it records a creation operation and enqueues the
-creation task of each work unit in turn. If either fails, the RPC returns `INTERNAL` naming that
-work unit at once, and the work units after it are not scheduled. The work units are already
-stored, so the study controller must not create them again when it retries.
+status and resources once. After the commit it records one creation operation per work unit and
+enqueues each creation task. A work unit whose operation or task cannot be created gets the `FATAL`
+status message `CreateWorkUnit` uses on enqueue failure (`CreateWorkUnit` does not mark `FATAL` if
+operation creation fails); ESS writes these messages for all such work units in one transaction.
+Then any already-recorded `Operation` for such a work unit is marked `Done` with `INTERNAL`, and the RPC
+returns `INTERNAL` naming those work units; the other work units are scheduled. This cleanup runs
+even if the caller cancels the RPC, bounded by its own timeout. The work units are already stored,
+so the study controller must not create them again when it retries.
 
 ##### Trust Boundary
 

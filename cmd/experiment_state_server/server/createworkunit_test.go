@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	lropb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -461,39 +462,116 @@ func TestCreateWorkUnit_DependencyFailures(t *testing.T) {
 	}
 }
 
+// createdWorkUnitStorage returns storage holding experiment 123 and its created work unit 1, whose
+// creation operation is recorded.
+func createdWorkUnitStorage() *storage.MockStorage {
+	return &storage.MockStorage{
+		Experiment: &msgpb.Experiment{Name: "experiments/123", Status: &msgpb.ExperimentStatus{}},
+		WorkUnit: &msgpb.WorkUnit{
+			Name: validator.ConstructWorkUnitName(123, 1),
+			CurrentWorkUnitExecution: &msgpb.WorkUnitExecution{
+				Name:   validator.ConstructWorkUnitExecutionName(123, 1, 1),
+				Status: &msgpb.WorkUnitStatus{State: msgpb.WorkUnitStatus_INITIALIZING},
+			},
+		},
+		LROOp: &lropb.Operation{Name: validator.ConstructOperationName(123, 1, "00000001-0000-0000-0000-000000000000")},
+	}
+}
+
+// fatalSystemMessage returns the system message recorded on the execution of work unit wid in st.
+func fatalSystemMessage(st *storage.MockStorage, wid int64) *msgpb.StructuredMessage {
+	return st.UpdatedWorkUnitExecutions[wid].GetStatus().GetSystemMessage()
+}
+
+// wantUnschedulable is the FATAL system message of created work unit 1 that could not be
+// scheduled, without its creation time.
+var wantUnschedulable = &msgpb.StructuredMessage{
+	UserFacingText: "Work unit was created but could not be scheduled for execution. Please restart the work unit.",
+	Severity:       msgpb.StructuredMessage_FATAL,
+	Source:         msgpb.StructuredMessage_XMANAGER_BACKEND,
+	Parent:         "experiments/123/workUnits/1",
+}
+
 func TestCreateWorkUnit_TaskEnqueueFails(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Config{DefaultExecutionEnvironment: "gke"}
-
-	goodWorkUnit := &msgpb.WorkUnit{
-		WorkUnitType: msgpb.WorkUnit_STANDARD,
-		Executable:   testExecutable,
-	}
 	goodReq := &msgpb.CreateWorkUnitRequest{
 		Parent:     "experiments/123",
 		WorkUnitId: 1,
-		WorkUnit:   goodWorkUnit,
+		WorkUnit:   &msgpb.WorkUnit{WorkUnitType: msgpb.WorkUnit_STANDARD, Executable: testExecutable},
 	}
-
 	xidClient := &mockXidClient{
 		checkUserAuthorizationResp: &xidmsgpb.CheckUserAuthorizationResponse{Authorized: proto.Bool(true)},
 	}
-	taskQueueClient := &tq.FakeClient{
-		EnqueueErr: fmt.Errorf("Task enqueue failed"),
+	enqueueErr := errors.New("task enqueue failed")
+
+	t.Run("marks the work unit FATAL and stops its operation", func(t *testing.T) {
+		st := createdWorkUnitStorage()
+		server := newTestServer(t, withConfig(cfg), withXidClient(xidClient), withStorage(st), withWorkUnitActuator(&tq.FakeClient{EnqueueErr: enqueueErr}))
+
+		_, err := server.CreateWorkUnit(ctx, proto.Clone(goodReq).(*msgpb.CreateWorkUnitRequest))
+
+		if !errors.Is(err, grpcerr.ErrInternal) || !strings.Contains(err.Error(), "failed to enqueue work unit for scheduling") || !strings.Contains(err.Error(), enqueueErr.Error()) {
+			t.Errorf("CreateWorkUnit() = %v, want Internal naming the enqueue error", err)
+		}
+		ignoreTime := protocmp.IgnoreFields(&msgpb.StructuredMessage{}, "create_time")
+		if diff := cmp.Diff(wantUnschedulable, fatalSystemMessage(st, 1), protocmp.Transform(), ignoreTime); diff != "" {
+			t.Errorf("recorded system message mismatch (-want +got):\n%s", diff)
+		}
+		got := st.GotOperationUpdate
+		if got == nil || got.WID != 1 || !got.Operation.GetDone() || got.Operation.GetError().GetCode() != int32(codes.Internal) {
+			t.Errorf("operation update = %+v, want work unit 1 done with an Internal error", got)
+		}
+	})
+
+	t.Run("invalid execution name keeps the enqueue error", func(t *testing.T) {
+		st := createdWorkUnitStorage()
+		server := newTestServer(t, withConfig(cfg), withXidClient(xidClient), withStorage(st), withWorkUnitActuator(&tq.FakeClient{EnqueueErr: enqueueErr}))
+		wu := &msgpb.WorkUnit{
+			Name:                     validator.ConstructWorkUnitName(123, 1),
+			CurrentWorkUnitExecution: &msgpb.WorkUnitExecution{Name: "invalid"},
+		}
+
+		err := server.WorkUnitHandler.enqueueWorkUnitOnCreation(ctx, 123, 1, wu, "test@example.com", st.LROOp)
+
+		if !errors.Is(err, grpcerr.ErrInternal) || !strings.Contains(err.Error(), enqueueErr.Error()) {
+			t.Errorf("enqueueWorkUnitOnCreation() = %v, want Internal naming the enqueue error", err)
+		}
+		if len(st.UpdatedWorkUnitExecutions) != 0 {
+			t.Errorf("updated executions = %v, want none for an invalid execution name", st.UpdatedWorkUnitExecutions)
+		}
+	})
+}
+
+func TestMarkWorkUnitUnschedulable(t *testing.T) {
+	tests := []struct {
+		name     string
+		execName string
+		want     *msgpb.StructuredMessage
+		wantErr  error
+	}{
+		{name: "valid execution name", execName: validator.ConstructWorkUnitExecutionName(123, 1, 1), want: wantUnschedulable},
+		{name: "invalid execution name", execName: "invalid", wantErr: grpcerr.ErrInternal},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := createdWorkUnitStorage()
+			server := newTestServer(t, withStorage(st))
+			wu := &msgpb.WorkUnit{
+				Name:                     validator.ConstructWorkUnitName(123, 1),
+				CurrentWorkUnitExecution: &msgpb.WorkUnitExecution{Name: tt.execName},
+			}
 
-	server := newTestServer(t,
-		withConfig(cfg),
-		withXidClient(xidClient),
-		withStorage(&storage.MockStorage{
-			Experiment: &msgpb.Experiment{Name: "experiments/123"},
-		}),
-		withWorkUnitActuator(taskQueueClient),
-	)
+			err := server.WorkUnitHandler.markWorkUnitUnschedulable(context.Background(), 123, 1, wu)
 
-	_, err := server.CreateWorkUnit(ctx, proto.Clone(goodReq).(*msgpb.CreateWorkUnitRequest))
-	if !errors.Is(err, grpcerr.ErrInternal) {
-		t.Errorf("CreateWorkUnit() = error %v, want %v", err, grpcerr.ErrInternal)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("markWorkUnitUnschedulable() = %v, want %v", err, tt.wantErr)
+			}
+			ignoreTime := protocmp.IgnoreFields(&msgpb.StructuredMessage{}, "create_time")
+			if diff := cmp.Diff(tt.want, fatalSystemMessage(st, 1), protocmp.Transform(), ignoreTime); diff != "" {
+				t.Errorf("recorded system message mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

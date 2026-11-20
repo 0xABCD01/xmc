@@ -21,10 +21,13 @@ import (
 	lropb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	fmpb "google.golang.org/protobuf/types/known/fieldmaskpb"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	msgpb "xmanager_cloud/api/protos/experiment"
 	xidmsgpb "xmanager_cloud/api/protos/xid"
 	"xmanager_cloud/internal/grpcerr"
 	"xmanager_cloud/internal/logging"
+	"xmanager_cloud/internal/storage"
 	"xmanager_cloud/internal/task_queue"
 	ee "xmanager_cloud/internal/toollibs/execution_environments"
 	"xmanager_cloud/internal/validator"
@@ -162,24 +165,47 @@ func (h *WorkUnitHandler) enqueueWorkUnitOnCreation(ctx context.Context, xid, wi
 	err = h.actuator.EnqueueWorkUnitTask(ctx, newWorkUnit.GetCurrentWorkUnitExecution().GetName(), newWorkUnit, client.CreateAction(exp.GetPriority(), email), operation.GetName())
 	if err != nil {
 		logging.Error(ctx, "Failed to enqueue work unit for scheduling", "name", newWorkUnit.GetName(), "error", err)
-		enqueueErr := err
-		_, _, eid, err := validator.ValidateWorkUnitExecutionName(newWorkUnit.GetCurrentWorkUnitExecution().GetName())
-		if err != nil {
-			logging.Error(ctx, "Failed to validate work unit execution name", "error", err)
-			return fmt.Errorf("failed to validate work unit execution name: %w (%v)", grpcerr.ErrInternal, err)
+		if markErr := h.markWorkUnitUnschedulable(ctx, xid, wid, newWorkUnit); markErr != nil {
+			logging.Error(ctx, "Failed to mark work unit unschedulable", "name", newWorkUnit.GetName(), "error", markErr)
 		}
+		return fmt.Errorf("failed to enqueue work unit for scheduling: %w (%v)", grpcerr.ErrInternal, err)
+	}
+	return nil
+}
 
-		if statusMsgErr := h.updateWorkUnitExecutionStatusMessage(ctx, xid, wid, eid, &msgpb.StructuredMessage{
+// markWorkUnitUnschedulable records a FATAL system message on the current execution of wu, a
+// created work unit whose creation operation or task could not be scheduled. It fails only when wu
+// has an invalid execution name; a failed status update is logged.
+func (h *WorkUnitHandler) markWorkUnitUnschedulable(ctx context.Context, xid, wid int64, wu *msgpb.WorkUnit) error {
+	update, err := newUnschedulableUpdate(wid, wu)
+	if err != nil {
+		return err
+	}
+	if _, err := h.workUnitUpdater.UpdateWorkUnitExecutions(ctx, xid, []*storage.WorkUnitExecutionUpdate{update}); err != nil {
+		logging.Error(ctx, "Failed to update work unit execution status message after failed create attempt", "error", err)
+	}
+	return nil
+}
+
+// newUnschedulableUpdate returns the update that records a FATAL system message on the current
+// execution of wu, created work unit wid, telling the user to restart it. It fails when wu has an
+// invalid execution name.
+func newUnschedulableUpdate(wid int64, wu *msgpb.WorkUnit) (*storage.WorkUnitExecutionUpdate, error) {
+	_, _, eid, err := validator.ValidateWorkUnitExecutionName(wu.GetCurrentWorkUnitExecution().GetName())
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate work unit execution name: %w (%v)", grpcerr.ErrInternal, err)
+	}
+	return &storage.WorkUnitExecutionUpdate{
+		WID: wid,
+		EID: eid,
+		WorkUnitExecution: &msgpb.WorkUnitExecution{Status: &msgpb.WorkUnitStatus{SystemMessage: &msgpb.StructuredMessage{
 			UserFacingText: "Work unit was created but could not be scheduled for execution. Please restart the work unit.",
 			Severity:       msgpb.StructuredMessage_FATAL,
 			Source:         msgpb.StructuredMessage_XMANAGER_BACKEND,
-		}, false); statusMsgErr != nil {
-			logging.Error(ctx, "Failed to update work unit execution status message after failed create attempt", "error", statusMsgErr)
-		}
-		logging.Error(ctx, "Failed to enqueue work unit for scheduling", "error", enqueueErr)
-		return fmt.Errorf("failed to enqueue work unit for scheduling: %w (%v)", grpcerr.ErrInternal, enqueueErr)
-	}
-	return nil
+			CreateTime:     timestamppb.Now(),
+		}}},
+		UpdateMask: &fmpb.FieldMask{Paths: []string{"status.system_message"}},
+	}, nil
 }
 
 func (h *WorkUnitHandler) checkExecutionEnvCompatibility(ctx context.Context, wu *msgpb.WorkUnit) (ee.Environment, error) {

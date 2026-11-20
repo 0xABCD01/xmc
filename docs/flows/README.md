@@ -90,8 +90,9 @@ an `Operation`, because the metadata change is committed synchronously and only 
 re-labelling the JobSet's priority class — is queued. The asynchrony is real, but there is no
 operation to poll. See
 [Work Unit Lifecycle §5](work_unit_lifecycle.md#5-update-work-unit). `BatchCreateWorkUnits` also
-answers with the created `WorkUnit`s; each still gets an operation that the Actuator completes. See
-[Batch create for studies](work_unit_lifecycle.md#batch-create-for-studies).
+answers with the created `WorkUnit`s; each still gets an operation that the Actuator completes,
+unless its task cannot be enqueued, in which case ESS itself stops the operation with `INTERNAL`.
+See [Batch create for studies](work_unit_lifecycle.md#batch-create-for-studies).
 
 ---
 
