@@ -450,13 +450,17 @@ func (s *MockStorage) InsertWorkUnits(ctx context.Context, wus []*essmsgpb.WorkU
 
 // AddWorkUnitOperation mocks adding a work unit operation. It returns LROOp when set. Otherwise,
 // like real storage, it returns a new pending operation named after xid and wid, so callers that
-// later complete or fail the operation reach UpdateWorkUnitOperation.
+// later complete or fail the operation reach UpdateWorkUnitOperation. The default path rejects nil
+// metadata with grpcerr.ErrInvalidArgument, as the Spanner and Postgres backends do.
 func (s *MockStorage) AddWorkUnitOperation(ctx context.Context, xid int64, wid int64, metadata *essmsgpb.OperationMetadata) (*lropb.Operation, error) {
 	if s.AddWorkUnitOperationErr != nil {
 		return nil, s.AddWorkUnitOperationErr
 	}
 	if s.LROOp != nil {
 		return s.LROOp, nil
+	}
+	if metadata == nil {
+		return nil, fmt.Errorf("operation metadata must not be nil: %w", grpcerr.ErrInvalidArgument)
 	}
 	anyMetadata, err := anypb.New(metadata)
 	if err != nil {

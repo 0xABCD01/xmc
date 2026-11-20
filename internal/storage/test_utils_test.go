@@ -24,6 +24,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
 	essmsgpb "xmanager_cloud/api/protos/experiment"
+	"xmanager_cloud/internal/grpcerr"
 	"xmanager_cloud/internal/validator"
 )
 
@@ -102,6 +103,14 @@ func TestMockStorage_AddWorkUnitOperation(t *testing.T) {
 		}
 		if diff := cmp.Diff(metadata, gotMetadata, protocmp.Transform()); diff != "" {
 			t.Errorf("AddWorkUnitOperation() metadata mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("rejects nil metadata like real storage", func(t *testing.T) {
+		m := &MockStorage{}
+		got, err := m.AddWorkUnitOperation(ctx, 123, 456, nil)
+		if !errors.Is(err, grpcerr.ErrInvalidArgument) || got != nil {
+			t.Errorf("AddWorkUnitOperation(nil metadata) = %v, %v, want nil, %v", got, err, grpcerr.ErrInvalidArgument)
 		}
 	})
 
