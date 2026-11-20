@@ -81,6 +81,12 @@ and combined with the work unit's own priority to resolve the Kueue `WorkloadPri
 (see [Execution Model §6](../architecture/execution_model.md#6-scheduling-and-priority)).
 Priority is therefore captured when the task is enqueued, not when the JobSet is built.
 
+`CreateWorkUnit` returns `FAILED_PRECONDITION` for a `STUDY` experiment. Its work units are trials,
+created only by the study controller, so the trial count always equals the number of stored work
+units (see [STUDY Experiments](../../cmd/experiment_state_server/README.md#study-experiments)). The
+check is the first read in step 4's transaction, before a work unit ID is assigned, so nothing is
+written.
+
 ### What the Actuator builds
 
 Step 10 is where a protobuf `WorkUnit` becomes a Kubernetes object. `cmd/actuator/k8s_client`
@@ -110,6 +116,41 @@ The response returns after step 8, typically in milliseconds and before any pod 
 what makes launching an experiment with hundreds of work units practical, and it is why
 `CreateWorkUnit` succeeding does not mean the work started — only that the intent is durably
 recorded and queued.
+
+### Batch create for studies
+
+The study controller creates the trials of a `STUDY` experiment with `BatchCreateWorkUnits`, which
+writes up to 500 work units in one transaction and returns them synchronously instead of an
+`Operation` (contract and errors in
+[STUDY Experiments](../../cmd/experiment_state_server/README.md#creating-trials-batchcreateworkunits)).
+
+```mermaid
+sequenceDiagram
+    participant SC as Study Controller
+    participant ESS as ESS (Exp State Server)
+    participant DB as Spanner/Postgres (Storage)
+    participant Redis
+    participant Actuator
+
+    SC->>ESS: 1. BatchCreateWorkUnits(parent, N requests)
+    ESS->>DB: 2. Read hpo component (studyControllerServiceAccount)
+    ESS->>DB: 3. FetchExperiment (STUDY, priority)
+    ESS->>ESS: 4. Validate and assemble each work unit
+    ESS->>DB: 5. One transaction: re-check caller, next WID, insert N work units, update experiment once
+    ESS->>DB: 6. AddWorkUnitOperation per work unit
+    ESS->>Redis: 7. XADD signed payload per work unit
+    ESS-->>SC: 8. N WorkUnits in request order
+    Redis-->>Actuator: 9. HandleWorkUnitTask per work unit (Async)
+```
+
+Step 2 runs right after authentication and the parent name check, before the experiment is read
+or the payload is validated, so callers other than the study controller get `PERMISSION_DENIED`
+and learn nothing else. Unlike step 6 of `CreateWorkUnit`, the experiment priority comes from the
+read in step 3, and the experiment is not read again. Step 5 assigns the IDs `next .. next+N-1`
+from a single next-ID read. Steps 6 and 7 run for one work unit after another. If either fails, the
+RPC returns `INTERNAL` naming that work unit at once, and the work units after it are not scheduled.
+The trials are already stored, so the controller must not create them again when it retries; ESS
+does not deduplicate batches.
 
 ---
 

@@ -296,6 +296,11 @@ queues:
           nvidia.com/gpu: "100000000"
           cpu: "100000000"
           memory: "100000000Gi"
+  # The TPU queue's shape is fixed in templates/kueue-dev/tpu-queue.yaml; only
+  # `enabled` is read. A cluster with no TPU node pools can set it false to omit
+  # the TPU ResourceFlavor, ClusterQueue, LocalQueue and the tpu-queue Namespace.
+  tpu:
+    enabled: true
 
 # Pass configuration to Kueue sub-chart
 kueue:

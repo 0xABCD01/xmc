@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODE="fix"
-if [ "${1:-}" = "--check" ]; then
-  MODE="check"
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || (cd "${SCRIPT_DIR}/.." && pwd))"
+cd "${REPO_ROOT}"
 
+<<<<<<< HEAD
 echo "=== Running XMC Pre-Commit Linter Hooks (Mode: ${MODE}) ==="
 FAILED=0
 AUTOSTAGE_STATE=""
@@ -463,3 +463,6 @@ main() {
 }
 
 main "$@"
+=======
+exec env XMC_BYPASS_VENV=1 python3 "${REPO_ROOT}/tools/lint/precommit_runner.py" "$@"
+>>>>>>> origin/main
