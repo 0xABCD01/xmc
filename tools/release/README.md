@@ -129,7 +129,7 @@ The tool emits structured JSON metadata:
 
 ## 5. Release Publisher CLI (`publish_release.py`)
 
-`publish_release.py` verifies that the root `VERSION` file at `--target-commit` matches `--tag` (ignoring any leading `v`, when `VERSION` is present; rejecting prerelease/development versions containing `-` unless `--prerelease` is set), creates an annotated git tag, pushes it to remote origin, and publishes the official release on GitHub via the `gh` CLI. Merge a `VERSION` bump to the release SemVer before verifying and tagging the release commit, then bump `VERSION` to the next development version afterward (e.g., `1.2.0` → `1.3.0-dev`; patch or major releases override the `-dev` base when cutting the release).
+`publish_release.py` creates an annotated git tag, pushes it to remote origin, and publishes the official release on GitHub via the `gh` CLI.
 
 ### CLI Usage
 
@@ -165,11 +165,10 @@ python3 tools/release/publish_release.py \
 | `--tag` | `-t` | *(required)* | Release semantic version tag (e.g. `0.6.0` or `v0.6.0`) |
 | `--notes-file` | `-f` | *(required)* | Path to markdown file containing formatted release notes |
 | `--title` | | `Release <tag>` | Release title on GitHub |
-| `--target-commit` | `-c` | `None` (`HEAD` without `--state-file`) | Target commit SHA, branch, or tag (overrides `--state-file` when provided) |
-| `--state-file` | | `None` | Optional JSON release state file to load/persist pinned `target_sha` and `version` across `--dry-run` and publish |
+| `--target-commit` | `-c` | `HEAD` | Target commit SHA, branch, or tag |
 | `--repo-dir` | `-r` | `.` | Path to git repository root |
 | `--remote` | | `origin` | Git remote name |
-| `--dry-run` | | `false` | Validate inputs, commit resolution, root `VERSION` match, and tag availability without creating tags or publishing |
+| `--dry-run` | | `false` | Validate inputs, commit resolution, and tag availability without creating tags or publishing |
 | `--skip-push` | | `false` | Skip pushing local tag to remote (passes `--verify-tag` to `gh release create`, requiring the tag to already exist on remote) |
 | `--draft` | | `false` | Create release as draft on GitHub |
 | `--prerelease` | | `false` | Mark release as prerelease on GitHub |
