@@ -48,7 +48,6 @@ export const MOCK_HEALTH_STATUS: HealthStatusResponse = {
   systemInfo: {
     appVersion: '1.5.1',
     buildVersion: 'v1.5.1-build.42',
-    imageTag: 'latest',
     essDbSchemaVersion: '3',
     xidDbSchemaVersion: '1',
     observabilityUrl: 'https://monitoring.xmc.internal',

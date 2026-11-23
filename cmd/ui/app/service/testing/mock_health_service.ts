@@ -36,7 +36,6 @@ export class MockHealthService extends HealthService {
       healthState: 'HEALTH_STATE_HEALTHY',
       systemInfo: {
         appVersion: 'mock-app-version-1.0.0',
-        imageTag: 'latest',
         essDbSchemaVersion: '6',
         xidDbSchemaVersion: '1',
         observabilityUrl: 'http://mock-observability-url',
@@ -55,7 +54,7 @@ export class MockHealthService extends HealthService {
         },
       ],
       healthCheckTime: { seconds: 1717804800, nanos: 0 },
-    } as any);
+    });
   }
 
   override getHealthConfigs(): Observable<ListConfigEntriesResponse> {
@@ -70,14 +69,14 @@ export class MockHealthService extends HealthService {
           ],
         },
       ],
-    } as any);
+    });
   }
 
   override getUserInfo(): Observable<UserInfoResponse> {
     return of({
       userEmail: 'mock-user@google.com',
       privileges: ['PRIVILEGE_ACCESS_ADMIN_PANEL'],
-    } as any);
+    });
   }
 
   override getSchedulingStatus(): Observable<GetSchedulingStatusResponse> {
