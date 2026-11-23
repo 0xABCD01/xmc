@@ -35,7 +35,7 @@ from tools.common.tool_utils import (  # noqa: E402
     ensure_venv,
     log_error,
 )
-from tools.common.workspace_status import FALLBACK_VERSION, read_version  # noqa: E402
+from tools.common.workspace_status import resolve_version  # noqa: E402
 from tools.dev_env import config, deploy_dev_env, upgrade_dev_env  # noqa: E402
 
 _LOGGER = logging.getLogger("xmc.dev_env")
@@ -566,11 +566,7 @@ def create_parser() -> argparse.ArgumentParser:
   python3 tools/dev_env/dev_env.py spanner drop --project-id my-proj
 """,
     )
-    try:
-        cli_version = read_version()
-    except (OSError, ValueError):
-        cli_version = FALLBACK_VERSION
-    parser.add_argument("--version", action="version", version=f"%(prog)s {cli_version}")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {resolve_version()}")
     parser.add_argument(
         "-v",
         "--verbose",

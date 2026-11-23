@@ -56,13 +56,24 @@ class DevEnvCliTest(unittest.TestCase):
         self.assertIn("Examples:", output)
 
     def test_parser_version_output(self) -> None:
-        """Verifies --version flag outputs version and exits cleanly."""
+        """Verifies --version flag outputs the repository version and falls back cleanly."""
         version_stream = io.StringIO()
+        with patch.object(dev_env, "resolve_version", return_value="1.2.0-dev"):
+            parser = dev_env.create_parser()
         with self.assertRaises(SystemExit) as cm:
             with patch("sys.stdout", version_stream):
-                self.parser.parse_args(["--version"])
+                parser.parse_args(["--version"])
         self.assertEqual(cm.exception.code, 0)
-        self.assertIn("dev_env", version_stream.getvalue())
+        self.assertIn("dev_env 1.2.0-dev", version_stream.getvalue())
+
+        fallback_stream = io.StringIO()
+        with patch("tools.common.workspace_status.read_version", side_effect=OSError("missing")):
+            fallback_parser = dev_env.create_parser()
+        with self.assertRaises(SystemExit) as cm:
+            with patch("sys.stdout", fallback_stream):
+                fallback_parser.parse_args(["--version"])
+        self.assertEqual(cm.exception.code, 0)
+        self.assertIn("developer-build", fallback_stream.getvalue())
 
     def test_main_no_args_prints_help_and_exits(self) -> None:
         """Verifies running main with empty args prints help and exits cleanly."""

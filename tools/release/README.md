@@ -129,7 +129,7 @@ The tool emits structured JSON metadata:
 
 ## 5. Release Publisher CLI (`publish_release.py`)
 
-`publish_release.py` creates an annotated git tag, pushes it to remote origin, and publishes the official release on GitHub via the `gh` CLI.
+`publish_release.py` verifies that the root `VERSION` file at `--target-commit` matches `--tag` (ignoring any leading `v`, when `VERSION` is present), creates an annotated git tag, pushes it to remote origin, and publishes the official release on GitHub via the `gh` CLI. Bump root `VERSION` to the release SemVer before tagging and to the next `<major>.<minor>.0-dev` afterward.
 
 ### CLI Usage
 

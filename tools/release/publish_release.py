@@ -21,6 +21,7 @@ from pathlib import Path
 from tools.common.tool_utils import HandledError, run_tool
 from tools.release.git_ops import (
     create_git_tag,
+    get_git_file_content,
     push_git_tag,
     resolve_repo_owner_and_name,
     resolve_target_commit,
@@ -79,11 +80,26 @@ def _validate_preflight(args: argparse.Namespace) -> tuple[str, Path, Path, str]
     return tag, repo_dir, notes_path, notes_content
 
 
+def _verify_version_file(tag: str, target_commit: str, repo_dir: Path) -> None:
+    """Verifies root VERSION at target_commit matches the release tag when present."""
+    raw = get_git_file_content(target_commit, "VERSION", repo_dir)
+    if raw is None:
+        return
+    file_version = raw.strip()
+    expected = tag.removeprefix("v")
+    if file_version != expected:
+        raise HandledError(
+            f"Root VERSION ({file_version!r}) at '{target_commit}' does not match release tag '{tag}'.",
+            f"Update the root VERSION file to '{expected}' and commit before publishing tag '{tag}'.",
+        )
+
+
 def publish_release(args: argparse.Namespace) -> PublishReleaseResult:
     """Creates an annotated git tag and publishes a GitHub Release."""
     tag, repo_dir, notes_path, notes_content = _validate_preflight(args)
     title = args.title or f"Release {tag}"
     target_commit = resolve_target_commit(args.target_commit or "HEAD", repo_dir)
+    _verify_version_file(tag, target_commit, repo_dir)
 
     tag_exists_and_matches = verify_local_tag(tag, repo_dir, args.force, target_commit)
     if not args.skip_push:

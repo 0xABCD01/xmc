@@ -50,15 +50,19 @@ def read_version(version_file: Path = DEFAULT_VERSION_FILE) -> str:
     return raw
 
 
+def resolve_version(version_file: Path = DEFAULT_VERSION_FILE, *, warn: bool = False) -> str:
+    """Returns the repository version or FALLBACK_VERSION if unreadable/invalid."""
+    try:
+        return read_version(version_file)
+    except (OSError, ValueError) as e:
+        if warn:
+            print(f"Error reading version file '{version_file}': {e}", file=sys.stderr)
+        return FALLBACK_VERSION
+
+
 def main(version_file: Path = DEFAULT_VERSION_FILE) -> None:
     """Emits STABLE_APP_VERSION for Bazel workspace status stamping."""
-    try:
-        version = read_version(version_file)
-    except (OSError, ValueError) as e:
-        print(f"Error reading version file '{version_file}': {e}", file=sys.stderr)
-        version = FALLBACK_VERSION
-
-    print(f"STABLE_APP_VERSION {version}")
+    print(f"STABLE_APP_VERSION {resolve_version(version_file, warn=True)}")
 
 
 if __name__ == "__main__":

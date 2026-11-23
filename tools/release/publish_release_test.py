@@ -52,6 +52,7 @@ class PublishReleaseTest(unittest.TestCase):
         with self.assertRaises(HandledError):
             read_notes_file(empty)
 
+    @patch("tools.release.publish_release.get_git_file_content", return_value="0.6.0\n")
     @patch("tools.release.publish_release.publish_via_gh_cli")
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -60,6 +61,7 @@ class PublishReleaseTest(unittest.TestCase):
         mock_subprocess: MagicMock,
         mock_which: MagicMock,
         mock_publish_gh: MagicMock,
+        _mock_version: MagicMock,
     ) -> None:
         mock_which.return_value = "/usr/bin/gh"
         mock_subprocess.return_value = MagicMock(stdout="", returncode=0)
@@ -97,6 +99,7 @@ class PublishReleaseTest(unittest.TestCase):
             self.assertNotIn("created locally", ctx.exception.instruction)
             self.assertNotIn("pushed to", ctx.exception.instruction)
 
+    @patch("tools.release.publish_release.get_git_file_content", return_value="0.6.0\n")
     @patch("tools.release.git_ops.get_git_remote_url")
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -105,6 +108,7 @@ class PublishReleaseTest(unittest.TestCase):
         mock_subprocess: MagicMock,
         mock_which: MagicMock,
         mock_remote_url: MagicMock,
+        _mock_version: MagicMock,
     ) -> None:
         mock_remote_url.return_value = "https://github.com/google/xmc"
         mock_which.return_value = "/usr/bin/gh"
@@ -135,6 +139,7 @@ class PublishReleaseTest(unittest.TestCase):
         self.assertEqual(res["status"], "success")
         self.assertEqual(res["tag"], "0.6.0")
 
+    @patch("tools.release.publish_release.get_git_file_content", return_value="0.6.0\n")
     @patch("tools.release.git_ops.get_git_remote_url")
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -145,6 +150,7 @@ class PublishReleaseTest(unittest.TestCase):
         mock_subprocess: MagicMock,
         mock_which: MagicMock,
         mock_remote_url: MagicMock,
+        _mock_version: MagicMock,
     ) -> None:
         mock_remote_url.return_value = "https://github.com/google/xmc"
         mock_which.return_value = None
@@ -205,6 +211,7 @@ class PublishReleaseTest(unittest.TestCase):
             publish_release(args)
         self.assertIn("does not exist", str(ctx.exception))
 
+    @patch("tools.release.publish_release.get_git_file_content", return_value="0.6.0\n")
     @patch("tools.release.git_ops.get_git_remote_url")
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -213,6 +220,7 @@ class PublishReleaseTest(unittest.TestCase):
         mock_subprocess: MagicMock,
         mock_which: MagicMock,
         mock_remote_url: MagicMock,
+        _mock_version: MagicMock,
     ) -> None:
         mock_remote_url.return_value = "https://github.com/google/xmc"
         mock_which.return_value = "/usr/bin/gh"
@@ -243,12 +251,14 @@ class PublishReleaseTest(unittest.TestCase):
         self.assertIn("Release URL is empty", str(ctx.exception))
         self.assertIn("pushed to", ctx.exception.instruction)
 
+    @patch("tools.release.publish_release.get_git_file_content", return_value="0.6.0\n")
     @patch("tools.release.git_ops.get_git_remote_url")
     @patch("subprocess.run")
     def test_publish_release_dry_run(
         self,
         mock_subprocess: MagicMock,
         mock_remote_url: MagicMock,
+        _mock_version: MagicMock,
     ) -> None:
         mock_remote_url.return_value = "https://github.com/google/xmc"
         mock_subprocess.return_value = MagicMock(stdout="", returncode=0)
@@ -268,6 +278,47 @@ class PublishReleaseTest(unittest.TestCase):
         res = publish_release(args)
         self.assertEqual(res["status"], "dry_run")
         self.assertEqual(res["release_url"], "https://github.com/google/xmc/releases/tag/0.6.0")
+
+    @patch("tools.release.git_ops.get_git_remote_url")
+    @patch("subprocess.run")
+    def test_publish_release_version_file_validation(
+        self,
+        mock_subprocess: MagicMock,
+        mock_remote_url: MagicMock,
+    ) -> None:
+        mock_remote_url.return_value = "https://github.com/google/xmc"
+        mock_subprocess.return_value = MagicMock(stdout="", returncode=0)
+        base_args = {
+            "notes_file": str(self.notes_file),
+            "title": None,
+            "target_commit": "HEAD",
+            "repo_dir": ".",
+            "remote": "origin",
+            "draft": False,
+            "prerelease": False,
+            "skip_push": False,
+            "dry_run": True,
+            "force": False,
+        }
+
+        # Mismatched VERSION (e.g. -dev suffix still present) fails preflight.
+        with patch(
+            "tools.release.publish_release.get_git_file_content", return_value="1.2.0-dev\n"
+        ):
+            with self.assertRaises(HandledError) as ctx:
+                publish_release(argparse.Namespace(tag="1.2.0", **base_args))
+            self.assertIn("does not match release tag", str(ctx.exception))
+            self.assertIn("1.2.0", ctx.exception.instruction)
+
+        # Leading 'v' on tag matches bare SemVer in VERSION.
+        with patch("tools.release.publish_release.get_git_file_content", return_value="1.2.0\n"):
+            res = publish_release(argparse.Namespace(tag="v1.2.0", **base_args))
+            self.assertEqual(res["status"], "dry_run")
+
+        # Historical commits without VERSION are permitted.
+        with patch("tools.release.publish_release.get_git_file_content", return_value=None):
+            res = publish_release(argparse.Namespace(tag="0.5.0", **base_args))
+            self.assertEqual(res["status"], "dry_run")
 
     def test_create_parser(self) -> None:
         parser = create_parser()

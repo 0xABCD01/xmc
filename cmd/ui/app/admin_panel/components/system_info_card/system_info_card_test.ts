@@ -118,5 +118,7 @@ describe('SystemInfoCardComponent', () => {
 
     const harness = await getHarness(SystemInfoCardHarness);
     expect(await harness.getObservabilityLinkHref()).toBeNull();
+    expect(await harness.getImageTagText()).toBe('-');
+    expect(await harness.isImageTagPlaceholder()).toBeTrue();
   });
 });
