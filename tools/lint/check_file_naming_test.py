@@ -23,6 +23,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from tools.common.tool_utils import HandledError
@@ -108,7 +109,7 @@ class CheckFileNamingEndToEndTest(unittest.TestCase):
         self.root = Path(self._tmp.name)
         subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
         self._write_and_stage("cmd/ui/index.html", "<!doctype html>\n")
-        patcher = mock.patch.object(cli, "LEGACY_UNPAIRED_ALLOWLIST", frozenset())
+        patcher: Any = mock.patch.object(cli, "LEGACY_UNPAIRED_ALLOWLIST", frozenset())
         patcher.start()
         self.addCleanup(patcher.stop)
 
