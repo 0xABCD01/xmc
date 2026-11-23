@@ -159,7 +159,7 @@ experiment's largest work unit ID. ESS checks, in order
 | :--- | :--- |
 | The caller is authenticated. | `UNAUTHENTICATED` |
 | `parent` is an experiment name. | `INVALID_ARGUMENT` |
-| The caller's verified email equals the `hpo` component parameter `studyControllerServiceAccount` (ASCII case-insensitive). XID ACLs are not consulted. A missing `hpo` component or an empty parameter rejects every caller. This check runs before the experiment is read or the payload is validated. | `PERMISSION_DENIED` |
+| The caller's verified email equals the `hpo` component parameter `studyControllerServiceAccount` (ASCII case-insensitive). XID ACLs are not consulted. A missing, disabled, or unacknowledged `hpo` component or an empty parameter rejects every caller. This check runs before the experiment is read or the payload is validated. | `PERMISSION_DENIED` |
 | The experiment exists. | `NOT_FOUND` |
 | The experiment is a `STUDY`; other types are not supported yet. | `UNIMPLEMENTED` |
 | The request holds 1 to 500 requests, each work unit is valid, as for `CreateWorkUnit`, and trial IDs are unique in the batch. | `INVALID_ARGUMENT` |

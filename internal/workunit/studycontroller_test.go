@@ -46,7 +46,7 @@ func TestAuthorizeStudyController(t *testing.T) {
 		{name: "parameter with surrounding whitespace", components: hpoCatalog(" " + studyControllerGSA), caller: studyControllerGSA, wantCode: codes.PermissionDenied},
 		{name: "hpo component absent", components: &storage.MockComponentRepository{}, caller: studyControllerGSA, wantCode: codes.PermissionDenied},
 		{name: "nil hpo record", components: &storage.MockComponentRepository{Records: map[string]*store.ComponentRecord{"hpo": nil}}, caller: studyControllerGSA, wantCode: codes.PermissionDenied},
-		{name: "hpo record without spec", components: &storage.MockComponentRepository{Records: map[string]*store.ComponentRecord{"hpo": {}}}, caller: studyControllerGSA, wantCode: codes.PermissionDenied},
+		{name: "hpo record without spec", components: &storage.MockComponentRepository{Records: map[string]*store.ComponentRecord{"hpo": {State: componentspb.ComponentState_COMPONENT_STATE_ENABLED}}}, caller: studyControllerGSA, wantCode: codes.PermissionDenied},
 		{name: "catalog read failure", components: &storage.MockComponentRepository{GetActiveComponentErr: errRead}, caller: studyControllerGSA, wantCode: codes.Unknown},
 	}
 	for _, tt := range tests {

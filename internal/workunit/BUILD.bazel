@@ -89,7 +89,6 @@ go_test(
     tags = ["local"],
     deps = [
         ":workunit",
-        "//api/protos/components/v1alpha1",
         "//api/protos/experiment:messages_go_proto",
         "//internal/experiment",
         "//internal/experiment/experimenttest",

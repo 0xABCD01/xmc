@@ -68,9 +68,10 @@ func IsStudyController(ctx context.Context, components ComponentReader, caller s
 }
 
 // AuthorizeStudyController returns nil when caller, a canonical email as returned by
-// auth.AuthenticateUserFromContext, is the studyControllerServiceAccount parameter of the active hpo
-// component read from components. It fails closed with ErrNotStudyController when the component is
-// missing or the parameter is empty or not a plain email address.
+// auth.AuthenticateUserFromContext, is the studyControllerServiceAccount parameter of an enabled or
+// pending-reconciliation hpo component read from components. It fails closed with
+// ErrNotStudyController when the component is missing, disabled/disabling/deleted/unspecified,
+// experimental without acknowledgement, or when caller or the parameter is empty or not a plain email address.
 func AuthorizeStudyController(ctx context.Context, components ComponentReader, caller string) error {
 	if components == nil {
 		return fmt.Errorf("component catalog is not available")
