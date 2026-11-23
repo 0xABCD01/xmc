@@ -15,12 +15,16 @@
 """Helper tool to tag git commits and publish GitHub Releases with release notes."""
 
 import argparse
+import json
 import shutil
+import sys
 from pathlib import Path
+from typing import Any
 
 from tools.common.tool_utils import HandledError, run_tool
 from tools.release.git_ops import (
     create_git_tag,
+    get_git_file_content,
     push_git_tag,
     resolve_repo_owner_and_name,
     resolve_target_commit,
@@ -79,22 +83,118 @@ def _validate_preflight(args: argparse.Namespace) -> tuple[str, Path, Path, str]
     return tag, repo_dir, notes_path, notes_content
 
 
+def _verify_version_file(
+    tag: str, target_commit: str, repo_dir: Path, *, allow_prerelease: bool = False
+) -> None:
+    """Verifies root VERSION at target_commit matches the release tag when present."""
+    raw = get_git_file_content(target_commit, "VERSION", repo_dir)
+    if raw is None:
+        print(
+            f"Note: Root VERSION not found at '{target_commit}'; skipping version match check.",
+            file=sys.stderr,
+        )
+        return
+    file_version = raw.strip()
+    expected = tag.removeprefix("v")
+    if file_version != expected:
+        raise HandledError(
+            f"Root VERSION ({file_version!r}) at '{target_commit}' does not match release tag '{tag}'.",
+            f"Update the root VERSION file to '{expected}' and commit before publishing tag '{tag}'.",
+        )
+    if "-" in expected and not allow_prerelease:
+        raise HandledError(
+            f"Refusing to publish prerelease/development version tag '{tag}' without --prerelease.",
+            "Update root VERSION and --tag to a release SemVer (e.g. '1.2.0') or pass --prerelease.",
+        )
+
+
+def _read_release_state(state_path: Path) -> dict[str, Any]:
+    """Reads a release state JSON file, returning an empty dict if absent or unreadable."""
+    if not state_path.is_file():
+        return {}
+    try:
+        loaded = json.loads(state_path.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _resolve_target_ref(
+    args: argparse.Namespace, expected_version: str, *, is_dry_run: bool
+) -> str:
+    """Determines the git target ref from --target-commit or --state-file."""
+    explicit = (getattr(args, "target_commit", None) or "").strip()
+    if explicit:
+        return explicit
+
+    state_file = getattr(args, "state_file", None)
+    if not state_file:
+        return "HEAD"
+
+    state = _read_release_state(Path(state_file))
+    state_sha = str(state.get("target_sha") or "").strip()
+    state_version = str(state.get("version") or "").strip()
+
+    if state_sha and state_version == expected_version:
+        return state_sha
+
+    if is_dry_run:
+        return "origin/main"
+
+    raise HandledError(
+        f"Release state file '{state_file}' does not contain a matching target_sha for version '{expected_version}'.",
+        f"Run publish_release.py --dry-run --tag {args.tag} --state-file {state_file} first, or pass --target-commit explicitly.",
+    )
+
+
+def _persist_release_state(
+    state_file: str | None, target_commit: str, expected_version: str
+) -> None:
+    """Persists pinned target_sha and version to state_file on dry-run."""
+    if not state_file:
+        return
+    state_path = Path(state_file)
+    existing = _read_release_state(state_path)
+    if (
+        str(existing.get("target_sha") or "").strip() == target_commit
+        and str(existing.get("version") or "").strip() == expected_version
+    ):
+        return
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"target_sha": target_commit, "version": expected_version}
+        state_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError as e:
+        raise HandledError(
+            f"Failed to write release state file '{state_path}': {e}",
+            "Check write permissions for the --state-file path.",
+        ) from e
+
+
 def publish_release(args: argparse.Namespace) -> PublishReleaseResult:
     """Creates an annotated git tag and publishes a GitHub Release."""
     tag, repo_dir, notes_path, notes_content = _validate_preflight(args)
     title = args.title or f"Release {tag}"
-    target_commit = resolve_target_commit(args.target_commit or "HEAD", repo_dir)
+    expected_version = tag.removeprefix("v")
+    is_dry_run = bool(getattr(args, "dry_run", False))
+    target_ref = _resolve_target_ref(args, expected_version, is_dry_run=is_dry_run)
+    target_commit = resolve_target_commit(target_ref, repo_dir)
+    _verify_version_file(
+        tag, target_commit, repo_dir, allow_prerelease=bool(getattr(args, "prerelease", False))
+    )
 
     tag_exists_and_matches = verify_local_tag(tag, repo_dir, args.force, target_commit)
     if not args.skip_push:
         verify_remote_tag(tag, repo_dir, args.force, remote=args.remote)
 
-    if getattr(args, "dry_run", False):
+    if is_dry_run:
+        _persist_release_state(getattr(args, "state_file", None), target_commit, expected_version)
         owner, repo = resolve_repo_owner_and_name(repo_dir, args.remote)
         return {
             "status": "dry_run",
             "tag": tag,
             "title": title,
+            "target_commit": target_commit,
             "release_url": f"https://github.com/{owner}/{repo}/releases/tag/{tag}",
             "release_id": None,
             "is_draft": bool(args.draft),
@@ -160,6 +260,7 @@ def publish_release(args: argparse.Namespace) -> PublishReleaseResult:
         "status": "success",
         "tag": tag,
         "title": title,
+        "target_commit": target_commit,
         "release_url": release_url,
         "release_id": release_id,
         "is_draft": bool(args.draft),
@@ -180,7 +281,15 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--title", help="Optional release title. Defaults to 'Release <tag>'.")
     parser.add_argument(
-        "--target-commit", "-c", default="HEAD", help="Target commit or branch to tag."
+        "--target-commit",
+        "-c",
+        default=None,
+        help="Target commit or branch to tag (defaults to --state-file target_sha when set, otherwise 'HEAD').",
+    )
+    parser.add_argument(
+        "--state-file",
+        default=None,
+        help="Optional JSON release state file to load/persist pinned target_sha and version across dry-run and publish.",
     )
     parser.add_argument("--repo-dir", "-r", default=".", help="Path to git repository root.")
     parser.add_argument("--remote", default="origin", help="Git remote name to push tags to.")
@@ -194,7 +303,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate inputs, commit resolution, and tag availability without creating tags or publishing.",
+        help="Validate inputs, commit resolution, root VERSION match, and tag availability without creating tags or publishing.",
     )
     parser.add_argument("--force", action="store_true", help="Force overwrite existing tag.")
     return parser
