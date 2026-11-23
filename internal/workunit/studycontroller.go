@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	componentspb "xmanager_cloud/api/protos/components/v1alpha1"
 	"xmanager_cloud/pkg/auth/principal"
 	"xmanager_cloud/pkg/components/store"
 )
@@ -42,10 +43,12 @@ type ComponentReader interface {
 	GetActiveComponent(ctx context.Context, canonicalName string) (*store.ComponentRecord, error)
 }
 
-// IsStudyController reports whether caller is the studyControllerServiceAccount parameter of the
-// active hpo component read from components. It fails closed, returning (false, nil) when
-// components is nil, the hpo component is missing, or the parameter is empty or invalid. Any
-// non-NotFound catalog read error is returned to the caller.
+// IsStudyController reports whether caller, a canonical email as returned by
+// auth.AuthenticateUserFromContext, is the studyControllerServiceAccount parameter of an enabled or
+// pending-reconciliation hpo component read from components. It fails closed, returning (false, nil)
+// when components is nil, the hpo component is missing, disabled/disabling/deleted, experimental
+// without acknowledgement, or the parameter is empty or invalid. Any non-NotFound catalog read error
+// is returned to the caller.
 func IsStudyController(ctx context.Context, components ComponentReader, caller string) (bool, error) {
 	if components == nil {
 		return false, nil
@@ -57,7 +60,11 @@ func IsStudyController(ctx context.Context, components ComponentReader, caller s
 	if err != nil {
 		return false, err
 	}
-	return principal.Normalize(caller) == want, nil
+	got, err := principal.CanonicalEmail(caller)
+	if err != nil {
+		return false, nil
+	}
+	return got == want, nil
 }
 
 // AuthorizeStudyController returns nil when caller, a canonical email as returned by
@@ -72,7 +79,8 @@ func AuthorizeStudyController(ctx context.Context, components ComponentReader, c
 	if err != nil {
 		return err
 	}
-	if principal.Normalize(caller) != want {
+	got, err := principal.CanonicalEmail(caller)
+	if err != nil || got != want {
 		return fmt.Errorf("caller %s is not the study controller: %w", caller, ErrNotStudyController)
 	}
 	return nil
@@ -91,6 +99,15 @@ func readStudyControllerPrincipal(ctx context.Context, components ComponentReade
 	}
 	if rec == nil {
 		return "", fmt.Errorf("component %q record is missing: %w", hpoComponentName, ErrNotStudyController)
+	}
+	if rec.State != componentspb.ComponentState_COMPONENT_STATE_ENABLED &&
+		rec.State != componentspb.ComponentState_COMPONENT_STATE_PENDING_RECONCILIATION {
+		return "", fmt.Errorf("component %q is not active (state %v): %w", hpoComponentName, rec.State, ErrNotStudyController)
+	}
+	if rec.Spec != nil &&
+		rec.Spec.GetStability() == componentspb.ComponentStability_COMPONENT_STABILITY_EXPERIMENTAL &&
+		!rec.Spec.GetAcknowledgeExperimental() {
+		return "", fmt.Errorf("component %q experimental stability is not acknowledged: %w", hpoComponentName, ErrNotStudyController)
 	}
 	want, err := principal.CanonicalEmail(rec.Spec.GetParameters()[studyControllerServiceAccountParameter])
 	if err != nil {

@@ -51,23 +51,11 @@ func (h *ExperimentHandler) GetExperiment(ctx context.Context, req *msgpb.GetExp
 	ctx = logging.WithExperimentName(ctx, name)
 
 	// 3. Retrieve the XID entry from the XID service for authorization purposes and to get ACLs.
-	// Only fall back to the study controller check on PermissionDenied so normal user reads incur
-	// zero component-catalog lookups.
+	// Only fall back to the study controller check on PermissionDenied or Internal (e.g. CRM
+	// outage in xid_service) so normal user reads incur zero component-catalog lookups.
 	xidEntry, err := h.fetchXidForExperiment(ctx, name, xid)
 	if err != nil {
-		if !errors.Is(err, grpcerr.ErrPermissionDenied) {
-			return nil, err
-		}
-		isCtrl, ctrlErr := workunit.IsStudyController(ctx, h.storage.Components(), email)
-		if ctrlErr != nil {
-			logging.Error(ctx, "Failed to check study controller identity", "error", ctrlErr)
-			return nil, fmt.Errorf("failed to check study controller identity: %w (%v)", grpcerr.ErrInternal, ctrlErr)
-		}
-		if isCtrl {
-			return h.getExperimentForStudyController(ctx, name, xid)
-		}
-		logging.Warn(ctx, "User not authorized to get experiment", "email", email, "error", err)
-		return nil, err
+		return h.fallbackGetExperiment(ctx, name, xid, email, err)
 	}
 
 	// 4. Retrieve the experiment from storage, attach ACLs, and evaluate component drift.
@@ -77,6 +65,24 @@ func (h *ExperimentHandler) GetExperiment(ctx context.Context, req *msgpb.GetExp
 	}
 	exp.Acls = xidEntry.GetAcls()
 	return h.finalizeGetExperiment(ctx, xid, exp), nil
+}
+
+func (h *ExperimentHandler) fallbackGetExperiment(ctx context.Context, name string, xid int64, email string, xidErr error) (*msgpb.Experiment, error) {
+	if errors.Is(xidErr, grpcerr.ErrNotFound) {
+		return nil, xidErr
+	}
+	isCtrl, ctrlErr := workunit.IsStudyController(ctx, h.storage.Components(), email)
+	if ctrlErr != nil {
+		logging.Error(ctx, "Failed to check study controller identity", "error", ctrlErr)
+		return nil, fmt.Errorf("failed to check study controller identity: %w (%v)", grpcerr.ErrInternal, ctrlErr)
+	}
+	if isCtrl {
+		return h.getExperimentForStudyController(ctx, name, xid)
+	}
+	if errors.Is(xidErr, grpcerr.ErrPermissionDenied) {
+		logging.Warn(ctx, "User not authorized to get experiment", "email", email, "error", xidErr)
+	}
+	return nil, xidErr
 }
 
 func (h *ExperimentHandler) getExperimentForStudyController(ctx context.Context, name string, xid int64) (*msgpb.Experiment, error) {

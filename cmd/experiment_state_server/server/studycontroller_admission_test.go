@@ -28,24 +28,30 @@ import (
 const testStudyControllerSA = "xmc-study-controller@my-project.iam.gserviceaccount.com"
 
 type stubAdmissionChecker struct {
-	admitted bool
-	err      error
-	calls    int
+	admitted  bool
+	err       error
+	gotEmails []string
 }
 
-func (s *stubAdmissionChecker) IsUserAuthorized(_ context.Context, _ string) (bool, error) {
-	s.calls++
+func (s *stubAdmissionChecker) IsUserAuthorized(_ context.Context, email string) (bool, error) {
+	s.gotEmails = append(s.gotEmails, email)
 	return s.admitted, s.err
 }
 
-type countingComponentReader struct {
-	workunit.ComponentReader
+type countingComponentRepository struct {
+	storage.ComponentRepository
 	calls int
 }
 
-func (c *countingComponentReader) GetActiveComponent(ctx context.Context, canonicalName string) (*store.ComponentRecord, error) {
+func (c *countingComponentRepository) GetActiveComponent(ctx context.Context, canonicalName string) (*store.ComponentRecord, error) {
 	c.calls++
-	return c.ComponentReader.GetActiveComponent(ctx, canonicalName)
+	return c.ComponentRepository.GetActiveComponent(ctx, canonicalName)
+}
+
+func newHPOComponentRepo(sa string) *storage.MockComponentRepository {
+	return &storage.MockComponentRepository{
+		Records: experimenttest.HPOCatalog(map[string]string{"studyControllerServiceAccount": sa}),
+	}
 }
 
 func TestStudyControllerAdmission_NilDelegate(t *testing.T) {
@@ -59,16 +65,11 @@ func TestStudyControllerAdmission_IsUserAuthorized(t *testing.T) {
 	t.Parallel()
 	errDelegate := errors.New("crm unavailable")
 	errCatalog := errors.New("db unavailable")
-	hpoRepo := func(sa string) workunit.ComponentReader {
-		return &storage.MockComponentRepository{
-			Records: experimenttest.HPOCatalog(map[string]string{"studyControllerServiceAccount": sa}),
-		}
-	}
 
 	tests := []struct {
 		name               string
 		delegate           stubAdmissionChecker
-		components         workunit.ComponentReader
+		components         storage.ComponentRepository
 		email              string
 		wantAdmitted       bool
 		wantErr            error
@@ -77,7 +78,7 @@ func TestStudyControllerAdmission_IsUserAuthorized(t *testing.T) {
 		{
 			name:               "delegate admits user with zero catalog lookups",
 			delegate:           stubAdmissionChecker{admitted: true},
-			components:         hpoRepo(testStudyControllerSA),
+			components:         newHPOComponentRepo(testStudyControllerSA),
 			email:              "alice@example.com",
 			wantAdmitted:       true,
 			wantCatalogLookups: 0,
@@ -85,7 +86,7 @@ func TestStudyControllerAdmission_IsUserAuthorized(t *testing.T) {
 		{
 			name:               "delegate denies study controller admitted via catalog",
 			delegate:           stubAdmissionChecker{admitted: false},
-			components:         hpoRepo(testStudyControllerSA),
+			components:         newHPOComponentRepo(testStudyControllerSA),
 			email:              testStudyControllerSA,
 			wantAdmitted:       true,
 			wantCatalogLookups: 1,
@@ -93,7 +94,7 @@ func TestStudyControllerAdmission_IsUserAuthorized(t *testing.T) {
 		{
 			name:               "study controller matched case-insensitively",
 			delegate:           stubAdmissionChecker{admitted: false},
-			components:         hpoRepo(testStudyControllerSA),
+			components:         newHPOComponentRepo(testStudyControllerSA),
 			email:              "XMC-Study-Controller@My-Project.iam.gserviceaccount.com",
 			wantAdmitted:       true,
 			wantCatalogLookups: 1,
@@ -101,7 +102,7 @@ func TestStudyControllerAdmission_IsUserAuthorized(t *testing.T) {
 		{
 			name:               "delegate errors during outage but study controller still admitted",
 			delegate:           stubAdmissionChecker{err: errDelegate},
-			components:         hpoRepo(testStudyControllerSA),
+			components:         newHPOComponentRepo(testStudyControllerSA),
 			email:              testStudyControllerSA,
 			wantAdmitted:       true,
 			wantCatalogLookups: 1,
@@ -109,7 +110,7 @@ func TestStudyControllerAdmission_IsUserAuthorized(t *testing.T) {
 		{
 			name:               "delegate denies non-controller user",
 			delegate:           stubAdmissionChecker{admitted: false},
-			components:         hpoRepo(testStudyControllerSA),
+			components:         newHPOComponentRepo(testStudyControllerSA),
 			email:              "mallory@example.com",
 			wantAdmitted:       false,
 			wantCatalogLookups: 1,
@@ -117,7 +118,7 @@ func TestStudyControllerAdmission_IsUserAuthorized(t *testing.T) {
 		{
 			name:               "delegate error preserved for non-controller user",
 			delegate:           stubAdmissionChecker{err: errDelegate},
-			components:         hpoRepo(testStudyControllerSA),
+			components:         newHPOComponentRepo(testStudyControllerSA),
 			email:              "alice@example.com",
 			wantAdmitted:       false,
 			wantErr:            errDelegate,
@@ -163,9 +164,9 @@ func TestStudyControllerAdmission_IsUserAuthorized(t *testing.T) {
 			t.Parallel()
 			delegate := tt.delegate
 			var reader workunit.ComponentReader
-			var counter *countingComponentReader
+			var counter *countingComponentRepository
 			if tt.components != nil {
-				counter = &countingComponentReader{ComponentReader: tt.components}
+				counter = &countingComponentRepository{ComponentRepository: tt.components}
 				reader = counter
 			}
 			checker := studyControllerAdmission(&delegate, reader)
@@ -176,8 +177,8 @@ func TestStudyControllerAdmission_IsUserAuthorized(t *testing.T) {
 			if got != tt.wantAdmitted {
 				t.Errorf("IsUserAuthorized() = %v, want %v", got, tt.wantAdmitted)
 			}
-			if delegate.calls != 1 {
-				t.Errorf("delegate calls = %d, want 1", delegate.calls)
+			if len(delegate.gotEmails) != 1 || delegate.gotEmails[0] != tt.email {
+				t.Errorf("delegate emails = %v, want [%q]", delegate.gotEmails, tt.email)
 			}
 			if counter != nil && counter.calls != tt.wantCatalogLookups {
 				t.Errorf("catalog lookups = %d, want %d", counter.calls, tt.wantCatalogLookups)

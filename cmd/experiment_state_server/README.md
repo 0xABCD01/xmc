@@ -137,13 +137,14 @@ need broad deployment admission. Normal user traffic checks the deployment admis
 active `hpo` component record.
 
 In `GetExperiment` ([`server/getexperiment.go`](server/getexperiment.go)), normal user traffic
-checks XID ACLs first (zero component-catalog lookups). Only when the XID service returns
-`PERMISSION_DENIED` does ESS check whether the caller's verified email matches
-`parameters.studyControllerServiceAccount` (ASCII case-insensitive); if so, it reads the experiment
-from storage directly and returns it (with `acls` unset) only when `experiment_type == STUDY`,
-rejecting non-`STUDY` experiments with `PERMISSION_DENIED` (`NOT_FOUND` if the experiment does not
-exist). When the `hpo` component is missing or the parameter is empty, the XID `PERMISSION_DENIED`
-error is returned (fail closed).
+checks XID ACLs first (zero component-catalog lookups). When the XID service returns
+`PERMISSION_DENIED` or `INTERNAL` (e.g. during a CRM outage), ESS checks whether the caller's
+verified email matches `parameters.studyControllerServiceAccount` (ASCII case-insensitive) of an
+enabled or pending-reconciliation (and experimentally acknowledged) `hpo` component; if so, it reads
+the experiment from storage directly and returns it (with `acls` unset) only when
+`experiment_type == STUDY`, rejecting non-`STUDY` experiments with `PERMISSION_DENIED` (`NOT_FOUND`
+if the experiment does not exist). When the `hpo` component is missing, disabled, unacknowledged, or
+the parameter is empty, the XID error is returned (fail closed).
 
 #### Creating Trials: `BatchCreateWorkUnits`
 
@@ -188,7 +189,8 @@ that ESS verifies (the `x-goog-user-email` header is not trusted), so it never m
 configured study controller, and `BatchCreateWorkUnits` fails with `PERMISSION_DENIED`. XID ACLs
 grant nothing there. Conversely, the configured `parameters.studyControllerServiceAccount` identity
 bypasses deployment admission and XID ACLs to call `GetExperiment` and `BatchCreateWorkUnits` on all
-`STUDY` experiments (non-`STUDY` experiments remain denied).
+`STUDY` experiments (on non-`STUDY` experiments, `GetExperiment` returns `PERMISSION_DENIED` and
+`BatchCreateWorkUnits` returns `UNIMPLEMENTED`).
 
 The check is only as strong as control over the configured identity. These principals can pass it:
 
