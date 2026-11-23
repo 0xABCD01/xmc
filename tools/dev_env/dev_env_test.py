@@ -56,7 +56,7 @@ class DevEnvCliTest(unittest.TestCase):
         self.assertIn("Examples:", output)
 
     def test_parser_version_output(self) -> None:
-        """Verifies --version flag outputs the repository version and falls back cleanly."""
+        """Verifies --version flag outputs the repository version."""
         version_stream = io.StringIO()
         with patch.object(dev_env, "resolve_version", return_value="1.2.0-dev"):
             parser = dev_env.create_parser()
@@ -66,6 +66,8 @@ class DevEnvCliTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 0)
         self.assertIn("dev_env 1.2.0-dev", version_stream.getvalue())
 
+    def test_parser_version_fallback(self) -> None:
+        """Verifies --version falls back cleanly when VERSION cannot be read."""
         fallback_stream = io.StringIO()
         with patch("tools.common.workspace_status.read_version", side_effect=OSError("missing")):
             fallback_parser = dev_env.create_parser()

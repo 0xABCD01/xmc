@@ -179,7 +179,7 @@ Using the classified commits and the [Release Notes Taxonomy Reference](referenc
 3. **Interactive Review**:
    Present the draft file path to the user for review. If the user requests adjustments (e.g. changing version number, tuning descriptions, or regrouping entries), use `replace_file_content` to update the markdown file.
 4. **Preflight Validation (`--dry-run`)**:
-   Run non-mutating preflight validation with `--dry-run` to verify tag format, commit resolution, tag availability on remote, and notes file readability prior to requesting user approval:
+   Ensure root `VERSION` at `--target-commit` matches the release `<version>` (if `origin/main` still carries a `-dev` or different version, merge a `chore(version): bump VERSION to <version>` PR first and target that verified commit). Run non-mutating preflight validation with `--dry-run` to verify tag format, commit resolution, root `VERSION` matching `--tag`, tag availability on remote, and notes file readability prior to requesting user approval:
    ```bash
    VERSION="<version>"
    NOTES_FILE="${ARTIFACT_DIR:-/tmp}/release_notes_v${VERSION}.md"
@@ -214,8 +214,8 @@ Using the classified commits and the [Release Notes Taxonomy Reference](referenc
    ```
    > [!NOTE]
    > Publishing as a draft gives the team a collaborative proofreading window (e.g. 1–2 hours) on GitHub Releases to review the changelog and propose adjustments before manually publishing it to the public. Omit `--draft` only if the user explicitly instructs to publish publicly immediately.
-3. **Confirm Publication**:
-   Provide the user with the generated GitHub Release URL and confirm that the git tag was successfully pushed.
+3. **Confirm Publication & Post-Release `VERSION` Bump**:
+   Provide the user with the generated GitHub Release URL, confirm that the git tag was successfully pushed, and remind/offer to open a follow-up PR bumping root `VERSION` to the next development version (e.g., `1.2.0` → `1.3.0-dev`; patch or major releases override the `-dev` base when cutting the release).
 4. **Draft to Public Promotion (Separate Post-Review Action)**:
    Once the collaborative proofreading window is complete and the user explicitly requests making the release public, promote the draft release:
    ```bash

@@ -16,6 +16,7 @@
 
 import argparse
 import shutil
+import sys
 from pathlib import Path
 
 from tools.common.tool_utils import HandledError, run_tool
@@ -80,10 +81,16 @@ def _validate_preflight(args: argparse.Namespace) -> tuple[str, Path, Path, str]
     return tag, repo_dir, notes_path, notes_content
 
 
-def _verify_version_file(tag: str, target_commit: str, repo_dir: Path) -> None:
+def _verify_version_file(
+    tag: str, target_commit: str, repo_dir: Path, *, allow_prerelease: bool = False
+) -> None:
     """Verifies root VERSION at target_commit matches the release tag when present."""
     raw = get_git_file_content(target_commit, "VERSION", repo_dir)
     if raw is None:
+        print(
+            f"Note: Root VERSION not found at '{target_commit}'; skipping version match check.",
+            file=sys.stderr,
+        )
         return
     file_version = raw.strip()
     expected = tag.removeprefix("v")
@@ -92,6 +99,11 @@ def _verify_version_file(tag: str, target_commit: str, repo_dir: Path) -> None:
             f"Root VERSION ({file_version!r}) at '{target_commit}' does not match release tag '{tag}'.",
             f"Update the root VERSION file to '{expected}' and commit before publishing tag '{tag}'.",
         )
+    if expected.endswith("-dev") and not allow_prerelease:
+        raise HandledError(
+            f"Refusing to publish development version tag '{tag}' without --prerelease.",
+            "Bump root VERSION to a release SemVer (e.g. '1.2.0') or pass --prerelease.",
+        )
 
 
 def publish_release(args: argparse.Namespace) -> PublishReleaseResult:
@@ -99,7 +111,9 @@ def publish_release(args: argparse.Namespace) -> PublishReleaseResult:
     tag, repo_dir, notes_path, notes_content = _validate_preflight(args)
     title = args.title or f"Release {tag}"
     target_commit = resolve_target_commit(args.target_commit or "HEAD", repo_dir)
-    _verify_version_file(tag, target_commit, repo_dir)
+    _verify_version_file(
+        tag, target_commit, repo_dir, allow_prerelease=bool(getattr(args, "prerelease", False))
+    )
 
     tag_exists_and_matches = verify_local_tag(tag, repo_dir, args.force, target_commit)
     if not args.skip_push:
@@ -210,7 +224,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate inputs, commit resolution, and tag availability without creating tags or publishing.",
+        help="Validate inputs, commit resolution, root VERSION match, and tag availability without creating tags or publishing.",
     )
     parser.add_argument("--force", action="store_true", help="Force overwrite existing tag.")
     return parser

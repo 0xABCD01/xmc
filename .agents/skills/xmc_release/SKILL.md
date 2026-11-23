@@ -46,8 +46,12 @@ This skill guides an agent through preparing, validating, and publishing an XMC 
   ```bash
   git fetch origin main --tags
   ```
-- **Initialize & Persist Release Target SHA**:
-  Resolve the target commit from `origin/main` and initialize state tracking (persisted to `"${ARTIFACT_DIR:-/tmp}/release_state.json"`):
+- **Prepare Root `VERSION` & Persist Release Target SHA**:
+  Root `VERSION` on `main` holds the next development version (e.g., `1.2.0-dev`) between releases, and `tools/release/publish_release.py` enforces that `VERSION` at `${TARGET_SHA}` matches `--tag` (ignoring any leading `v`). Before running nightly/E2E verification, inspect `VERSION` on `origin/main`:
+  ```bash
+  git show origin/main:VERSION
+  ```
+  If `VERSION` does not yet equal the target release SemVer `<version>` (for example, it still ends in `-dev` or needs a patch/major override), merge a `chore(version): bump VERSION to <version>` PR into `main` first and re-fetch `origin/main` so that nightly deployment, E2E verification, visual snapshots, and `publish_release.py` all pin the exact same commit. Then resolve and persist `${TARGET_SHA}` to `"${ARTIFACT_DIR:-/tmp}/release_state.json"`:
   ```bash
   TARGET_SHA=$(git rev-parse origin/main)
   STATE_FILE="${ARTIFACT_DIR:-/tmp}/release_state.json"
@@ -213,3 +217,4 @@ Delegate the end-to-end release documentation, interactive user review, and publ
    PYTHONPATH=. python3 ./tools/release/publish_release.py --tag <version> --notes-file <path_to_markdown_file> --target-commit "${TARGET_SHA}" --draft
    ```
    *(Note: Never pass `--force`. If the tag already exists, abort and consult the user).*
+   *(Post-release follow-up: after publishing the release, open a PR bumping root `VERSION` to the next development version, e.g., `1.2.0` → `1.3.0-dev`.)*

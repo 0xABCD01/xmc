@@ -18,7 +18,7 @@ import argparse
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from tools.common.tool_utils import HandledError
 from tools.release.publish_release import (
@@ -301,14 +301,27 @@ class PublishReleaseTest(unittest.TestCase):
             "force": False,
         }
 
-        # Mismatched VERSION (e.g. -dev suffix still present) fails preflight.
+        # Mismatched VERSION fails preflight with exact update guidance.
+        with patch(
+            "tools.release.publish_release.get_git_file_content", return_value="1.2.0\n"
+        ) as mock_read:
+            with self.assertRaises(HandledError) as ctx:
+                publish_release(argparse.Namespace(tag="v1.3.0", **base_args))
+            self.assertIn("does not match release tag", str(ctx.exception))
+            self.assertIn("Update the root VERSION file to '1.3.0'", ctx.exception.instruction)
+            mock_read.assert_called_once_with(ANY, "VERSION", ANY)
+
+        # -dev tags are rejected unless --prerelease is set.
         with patch(
             "tools.release.publish_release.get_git_file_content", return_value="1.2.0-dev\n"
         ):
             with self.assertRaises(HandledError) as ctx:
-                publish_release(argparse.Namespace(tag="1.2.0", **base_args))
-            self.assertIn("does not match release tag", str(ctx.exception))
-            self.assertIn("1.2.0", ctx.exception.instruction)
+                publish_release(argparse.Namespace(tag="1.2.0-dev", **base_args))
+            self.assertIn("development version tag", str(ctx.exception))
+
+            prerelease_args = {**base_args, "prerelease": True}
+            res = publish_release(argparse.Namespace(tag="1.2.0-dev", **prerelease_args))
+            self.assertEqual(res["status"], "dry_run")
 
         # Leading 'v' on tag matches bare SemVer in VERSION.
         with patch("tools.release.publish_release.get_git_file_content", return_value="1.2.0\n"):

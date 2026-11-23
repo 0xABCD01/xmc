@@ -118,6 +118,20 @@ describe('SystemInfoCardComponent', () => {
 
     const harness = await getHarness(SystemInfoCardHarness);
     expect(await harness.getObservabilityLinkHref()).toBeNull();
+  });
+
+  it('should display - with is-placeholder class when imageTag is absent', async () => {
+    const mockSystemInfo: SystemInfo = {
+      appVersion: '1.0.0',
+      essDbSchemaVersion: '12',
+      xidDbSchemaVersion: '34',
+    };
+
+    const host = bootstrap(TestHostComponent);
+    host.info.set(mockSystemInfo);
+    await flush();
+
+    const harness = await getHarness(SystemInfoCardHarness);
     expect(await harness.getImageTagText()).toBe('-');
     expect(await harness.isImageTagPlaceholder()).toBeTrue();
   });
