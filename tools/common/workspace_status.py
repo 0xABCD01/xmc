@@ -54,7 +54,7 @@ def main(version_file: Path = DEFAULT_VERSION_FILE) -> None:
     """Emits STABLE_APP_VERSION for Bazel workspace status stamping."""
     try:
         version = read_version(version_file)
-    except Exception as e:
+    except (OSError, ValueError) as e:
         print(f"Error reading version file '{version_file}': {e}", file=sys.stderr)
         version = FALLBACK_VERSION
 
