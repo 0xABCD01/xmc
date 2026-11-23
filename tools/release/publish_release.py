@@ -99,10 +99,10 @@ def _verify_version_file(
             f"Root VERSION ({file_version!r}) at '{target_commit}' does not match release tag '{tag}'.",
             f"Update the root VERSION file to '{expected}' and commit before publishing tag '{tag}'.",
         )
-    if expected.endswith("-dev") and not allow_prerelease:
+    if "-" in expected and not allow_prerelease:
         raise HandledError(
-            f"Refusing to publish development version tag '{tag}' without --prerelease.",
-            "Bump root VERSION to a release SemVer (e.g. '1.2.0') or pass --prerelease.",
+            f"Refusing to publish prerelease/development version tag '{tag}' without --prerelease.",
+            "Update root VERSION and --tag to a release SemVer (e.g. '1.2.0') or pass --prerelease.",
         )
 
 

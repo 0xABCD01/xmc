@@ -129,7 +129,7 @@ The tool emits structured JSON metadata:
 
 ## 5. Release Publisher CLI (`publish_release.py`)
 
-`publish_release.py` verifies that the root `VERSION` file at `--target-commit` matches `--tag` (ignoring any leading `v`, when `VERSION` is present; rejecting `-dev` versions unless `--prerelease` is set), creates an annotated git tag, pushes it to remote origin, and publishes the official release on GitHub via the `gh` CLI. Merge a `VERSION` bump to the release SemVer before verifying and tagging the release commit, then bump `VERSION` to the next development version afterward (e.g., `1.2.0` → `1.3.0-dev`; patch or major releases override the `-dev` base when cutting the release).
+`publish_release.py` verifies that the root `VERSION` file at `--target-commit` matches `--tag` (ignoring any leading `v`, when `VERSION` is present; rejecting prerelease/development versions containing `-` unless `--prerelease` is set), creates an annotated git tag, pushes it to remote origin, and publishes the official release on GitHub via the `gh` CLI. Merge a `VERSION` bump to the release SemVer before verifying and tagging the release commit, then bump `VERSION` to the next development version afterward (e.g., `1.2.0` → `1.3.0-dev`; patch or major releases override the `-dev` base when cutting the release).
 
 ### CLI Usage
 
