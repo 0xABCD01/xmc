@@ -11,17 +11,14 @@ This skill guides an agent through preparing, validating, and publishing an XMC 
 > All execution steps in this skill MUST strictly adhere to the policy rules defined in [Core Engineering Standards](../../rules/core_engineering.md) and [Skills & Automation Guidelines](../../rules/skills_and_automation.md).
 
 ### Resumption & Phase Selection
-- **Idempotency & Recent Run Check**: If resuming an interrupted release or if `main` has already been deployed and tested today, load `TARGET_SHA` from `${STATE_FILE}`, verify that `git show "${TARGET_SHA}:VERSION"` matches the persisted release `version` (and is not a `-dev` version), and check for existing successful workflow runs targeting that commit before re-triggering using `--find-existing`:
+- **Idempotency & Recent Run Check**: If resuming an interrupted release or if `main` has already been deployed and tested today, load `TARGET_SHA` from `${STATE_FILE}`, verify `git show "${TARGET_SHA}:VERSION"` matches the target release version (not `-dev`), and check for existing successful workflow runs targeting that commit using `--find-existing`:
   ```bash
   STATE_FILE="${ARTIFACT_DIR:-/tmp}/release_state.json"
   if [[ -z "${TARGET_SHA:-}" && -f "${STATE_FILE}" ]]; then
     TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}")
   fi
   : "${TARGET_SHA:?Error: TARGET_SHA not set and not found in ${STATE_FILE}; run Prerequisites first}"
-  EXPECTED_VERSION=$(jq -r '.version // empty' "${STATE_FILE}")
-  ACTUAL_VERSION=$(git show "${TARGET_SHA}:VERSION")
-  echo "Persisted version: ${EXPECTED_VERSION} | Commit VERSION: ${ACTUAL_VERSION}"
-  test -n "${EXPECTED_VERSION}" && test "${ACTUAL_VERSION}" = "${EXPECTED_VERSION}"
+  git show "${TARGET_SHA}:VERSION"
 
   PYTHONPATH=. python3 tools/release/dispatch_and_watch.py \
     --workflow nightly-build.yml \
@@ -29,18 +26,7 @@ This skill guides an agent through preparing, validating, and publishing an XMC 
     --find-existing \
     --state-file "${STATE_FILE}"
   ```
-- **Direct Entry**: If deployment and E2E tests have already succeeded for the target `TARGET_SHA` commit (whose `VERSION` matches the target release version), the agent may proceed directly to Phase 4 or Phase 5. Load `TARGET_SHA` from `"${STATE_FILE}"` if unset and verify `VERSION`:
-  ```bash
-  STATE_FILE="${STATE_FILE:-${ARTIFACT_DIR:-/tmp}/release_state.json}"
-  if [[ -z "${TARGET_SHA:-}" && -f "${STATE_FILE}" ]]; then
-    TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}")
-  fi
-  : "${TARGET_SHA:?Error: TARGET_SHA not set and not found in ${STATE_FILE}; run Prerequisites first}"
-  EXPECTED_VERSION=$(jq -r '.version // empty' "${STATE_FILE}")
-  ACTUAL_VERSION=$(git show "${TARGET_SHA}:VERSION")
-  echo "Persisted version: ${EXPECTED_VERSION} | Commit VERSION: ${ACTUAL_VERSION}"
-  test -n "${EXPECTED_VERSION}" && test "${ACTUAL_VERSION}" = "${EXPECTED_VERSION}"
-  ```
+- **Direct Entry**: If deployment and E2E tests have already succeeded for the target `TARGET_SHA` commit (whose `VERSION` matches the target release version), the agent may proceed directly to Phase 4 or Phase 5 after loading `TARGET_SHA` from `"${STATE_FILE}"` as above.
 - **Post-Review Resumption**: When resuming after the user approval gate, proceed with executing the publishing step in Phase 5 using the release notes at `"${ARTIFACT_DIR:-/tmp}/release_notes_v<version>.md"` without re-running earlier phases.
 
 > [!CAUTION]

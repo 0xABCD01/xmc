@@ -165,7 +165,8 @@ python3 tools/release/publish_release.py \
 | `--tag` | `-t` | *(required)* | Release semantic version tag (e.g. `0.6.0` or `v0.6.0`) |
 | `--notes-file` | `-f` | *(required)* | Path to markdown file containing formatted release notes |
 | `--title` | | `Release <tag>` | Release title on GitHub |
-| `--target-commit` | `-c` | `HEAD` | Target commit SHA, branch, or tag |
+| `--target-commit` | `-c` | `None` (`HEAD` without `--state-file`) | Target commit SHA, branch, or tag (overrides `--state-file` when provided) |
+| `--state-file` | | `None` | Optional JSON release state file to load/persist pinned `target_sha` and `version` across `--dry-run` and publish |
 | `--repo-dir` | `-r` | `.` | Path to git repository root |
 | `--remote` | | `origin` | Git remote name |
 | `--dry-run` | | `false` | Validate inputs, commit resolution, root `VERSION` match, and tag availability without creating tags or publishing |

@@ -187,28 +187,14 @@ Using the classified commits and the [Release Notes Taxonomy Reference](referenc
    ```
    Then re-verify the new commit (if running via [XMC Release](../xmc_release/SKILL.md), restart from [Phase 1](../xmc_release/SKILL.md#phase-1-deploy-newest-main-to-nightly) before re-running `--dry-run` preflight).
 4. **Preflight Validation (`--dry-run`)**:
-   Ensure `origin/main` is up to date (`git fetch origin main --tags`) and that root `VERSION` at `${TARGET_SHA}` matches `<version>` (see step 3 above if a bump PR is needed). When running **standalone** (outside [XMC Release](../xmc_release/SKILL.md)), explicitly resolve `TARGET_SHA=$(git rev-parse origin/main)` so a leftover `${STATE_FILE}` from an earlier or aborted release is never reused; when running via [XMC Release](../xmc_release/SKILL.md), leave `TARGET_SHA` unset (or set from Prerequisites) so the verified commit from `${STATE_FILE}` is loaded only if its persisted `.version` matches `${VERSION}`. Run non-mutating preflight validation with `--dry-run` (persisting `${TARGET_SHA}` and `<version>` to `${STATE_FILE}` when absent or changed so Section 6 step 2 pins the exact same commit):
+   Ensure `origin/main` is up to date (`git fetch origin main --tags`) and that root `VERSION` at the target commit matches `<version>` (see step 3 above if a bump PR is needed). Run non-mutating preflight validation with `--dry-run` and `--state-file` (when running **standalone** outside [XMC Release](../xmc_release/SKILL.md), also pass `--target-commit origin/main` so any leftover state file is refreshed; `publish_release.py` validates root `VERSION`, persists `target_sha`/`version` to `${STATE_FILE}` so Section 6 step 2 pins the exact same commit, and returns `target_commit` in its JSON output):
    ```bash
    VERSION="<version>"
    STATE_FILE="${ARTIFACT_DIR:-/tmp}/release_state.json"
-   # For fresh standalone runs (outside XMC Release), uncomment the next line:
-   # TARGET_SHA=$(git rev-parse origin/main)
-   if [[ -z "${TARGET_SHA:-}" && -f "${STATE_FILE}" ]]; then
-     STATE_VERSION=$(jq -r '.version // empty' "${STATE_FILE}")
-     if [[ "${STATE_VERSION}" == "${VERSION}" ]]; then
-       TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}")
-     fi
-   fi
-   TARGET_SHA="${TARGET_SHA:-$(git rev-parse origin/main)}"
-   if [[ ! -f "${STATE_FILE}" || "$(jq -r '.target_sha // empty' "${STATE_FILE}")" != "${TARGET_SHA}" || "$(jq -r '.version // empty' "${STATE_FILE}")" != "${VERSION}" ]]; then
-     jq -n --arg sha "${TARGET_SHA}" --arg v "${VERSION}" '{target_sha: $sha, version: $v}' > "${STATE_FILE}"
-   fi
-   echo "Pinned target commit: ${TARGET_SHA}"
-   git log -1 --oneline "${TARGET_SHA}"
    NOTES_FILE="${ARTIFACT_DIR:-/tmp}/release_notes_v${VERSION}.md"
    PYTHONPATH=. python3 ./tools/release/publish_release.py \
        --tag "${VERSION}" \
-       --target-commit "${TARGET_SHA}" \
+       --state-file "${STATE_FILE}" \
        --notes-file "${NOTES_FILE}" \
        --dry-run
    ```
@@ -223,20 +209,16 @@ Using the classified commits and the [Release Notes Taxonomy Reference](referenc
 > 2. **NEVER USE `--force` TO OVERWRITE AN EXISTING TAG OR RELEASE AUTONOMOUSLY**: If a tag or release already exists locally or on the remote, abort immediately and consult the user.
 
 1. **Wait for Explicit User Approval**:
-   Confirm that the user has explicitly approved the **version number**, the **target commit SHA** (`git log -1 --oneline "${TARGET_SHA}"`), and the **release notes content**.
+   Confirm that the user has explicitly approved the **version number**, the **target commit SHA** (from the `--dry-run` JSON `target_commit`), and the **release notes content**.
 2. **Publish Release as GitHub Draft (Post-Approval Only)**:
-   Execute the release publishing tool with `--draft` and explicitly pin `--target-commit "${TARGET_SHA}"` loaded from `${STATE_FILE}` to ensure the release tag points to the canonical verified main commit:
+   Execute the release publishing tool with `--draft` and `--state-file` so the release tag pins the exact verified commit recorded during `--dry-run`:
    ```bash
    VERSION="<version>"
    STATE_FILE="${ARTIFACT_DIR:-/tmp}/release_state.json"
-   if [[ -z "${TARGET_SHA:-}" && -f "${STATE_FILE}" ]]; then
-     TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}")
-   fi
-   : "${TARGET_SHA:?Error: TARGET_SHA not set and not found in ${STATE_FILE}}"
    NOTES_FILE="${ARTIFACT_DIR:-/tmp}/release_notes_v${VERSION}.md"
    PYTHONPATH=. python3 ./tools/release/publish_release.py \
        --tag "${VERSION}" \
-       --target-commit "${TARGET_SHA}" \
+       --state-file "${STATE_FILE}" \
        --notes-file "${NOTES_FILE}" \
        --draft
    ```

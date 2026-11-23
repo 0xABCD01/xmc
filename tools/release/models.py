@@ -163,6 +163,7 @@ class PublishReleaseResult(TypedDict):
     status: str
     tag: str
     title: str
+    target_commit: str
     release_url: str
     release_id: int | None
     is_draft: bool

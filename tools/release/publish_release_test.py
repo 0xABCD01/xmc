@@ -16,6 +16,7 @@
 
 import argparse
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -348,13 +349,135 @@ class PublishReleaseTest(unittest.TestCase):
             self.assertEqual(res["status"], "dry_run")
             self.assertIn("Root VERSION not found", err_buf.getvalue())
 
+    @patch("tools.release.publish_release.get_git_file_content", return_value="1.2.0\n")
+    @patch("tools.release.git_ops.get_git_remote_url", return_value="https://github.com/google/xmc")
+    @patch("tools.release.publish_release.verify_remote_tag")
+    @patch("tools.release.publish_release.verify_local_tag", return_value=False)
+    @patch("tools.release.publish_release.resolve_target_commit")
+    def test_publish_release_state_file_pinning(
+        self,
+        mock_resolve: MagicMock,
+        _mock_local: MagicMock,
+        _mock_remote: MagicMock,
+        _mock_url: MagicMock,
+        _mock_version: MagicMock,
+    ) -> None:
+        state_file = Path(self.temp_dir.name) / "release_state.json"
+        base_args = {
+            "tag": "1.2.0",
+            "notes_file": str(self.notes_file),
+            "title": None,
+            "target_commit": None,
+            "state_file": str(state_file),
+            "repo_dir": ".",
+            "remote": "origin",
+            "draft": True,
+            "prerelease": False,
+            "skip_push": False,
+            "dry_run": True,
+            "force": False,
+        }
+
+        # 1. No state file yet: dry-run resolves origin/main and persists pinned SHA/version.
+        mock_resolve.return_value = "aaa111"
+        res = publish_release(argparse.Namespace(**base_args))
+        mock_resolve.assert_called_with("origin/main", ANY)
+        self.assertEqual(res["target_commit"], "aaa111")
+        self.assertEqual(
+            json.loads(state_file.read_text(encoding="utf-8")),
+            {"target_sha": "aaa111", "version": "1.2.0"},
+        )
+
+        # 2. Matching state file with extra keys (e.g., dispatch_and_watch): reused & preserved.
+        state_file.write_text(
+            json.dumps({"target_sha": "bbb222", "version": "1.2.0", "run_id": 42}),
+            encoding="utf-8",
+        )
+        mock_resolve.return_value = "bbb222"
+        res = publish_release(argparse.Namespace(**base_args))
+        mock_resolve.assert_called_with("bbb222", ANY)
+        self.assertEqual(res["target_commit"], "bbb222")
+        self.assertEqual(json.loads(state_file.read_text(encoding="utf-8"))["run_id"], 42)
+
+        # 3. Stale or pre-VERSION state file (mismatched/missing version): ignored & overwritten.
+        for stale in (
+            {"target_sha": "old000", "version": "1.1.0"},
+            {"target_sha": "old000"},
+        ):
+            with self.subTest(stale=stale):
+                state_file.write_text(json.dumps(stale), encoding="utf-8")
+                mock_resolve.return_value = "ccc333"
+                res = publish_release(argparse.Namespace(**base_args))
+                mock_resolve.assert_called_with("origin/main", ANY)
+                self.assertEqual(res["target_commit"], "ccc333")
+                self.assertEqual(
+                    json.loads(state_file.read_text(encoding="utf-8")),
+                    {"target_sha": "ccc333", "version": "1.2.0"},
+                )
+
+        # 4. Explicit --target-commit overrides a same-version state file and refreshes it.
+        state_file.write_text(
+            json.dumps({"target_sha": "broken111", "version": "1.2.0"}),
+            encoding="utf-8",
+        )
+        mock_resolve.return_value = "fixed222"
+        res = publish_release(argparse.Namespace(**{**base_args, "target_commit": "origin/main"}))
+        mock_resolve.assert_called_with("origin/main", ANY)
+        self.assertEqual(
+            json.loads(state_file.read_text(encoding="utf-8")),
+            {"target_sha": "fixed222", "version": "1.2.0"},
+        )
+
+        # 5. Non-dry-run publish with --state-file fails fast if missing or version-mismatched.
+        publish_args = {**base_args, "dry_run": False}
+        state_file.write_text(
+            json.dumps({"target_sha": "old000", "version": "1.1.0"}), encoding="utf-8"
+        )
+        with self.assertRaises(HandledError) as ctx:
+            publish_release(argparse.Namespace(**publish_args))
+        self.assertIn("does not contain a matching target_sha", str(ctx.exception))
+
+        state_file.unlink()
+        with self.assertRaises(HandledError):
+            publish_release(argparse.Namespace(**publish_args))
+
+        # 6. Non-dry-run publish with matching --state-file tags the pinned commit.
+        state_file.write_text(
+            json.dumps({"target_sha": "fixed222", "version": "1.2.0"}), encoding="utf-8"
+        )
+        mock_resolve.return_value = "fixed222"
+        with (
+            patch("tools.release.publish_release.create_git_tag") as mock_tag,
+            patch("tools.release.publish_release.push_git_tag"),
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch(
+                "tools.release.publish_release.publish_via_gh_cli",
+                return_value="https://github.com/google/xmc/releases/tag/1.2.0",
+            ),
+        ):
+            res = publish_release(argparse.Namespace(**publish_args))
+        mock_resolve.assert_called_with("fixed222", ANY)
+        mock_tag.assert_called_once_with("1.2.0", "fixed222", "Release 1.2.0", ANY, False)
+        self.assertEqual(res["target_commit"], "fixed222")
+
     def test_create_parser(self) -> None:
         parser = create_parser()
         self.assertIsNotNone(parser)
         args = parser.parse_args(
-            ["--tag", "0.6.0", "--notes-file", "notes.md", "--remote", "upstream"]
+            [
+                "--tag",
+                "0.6.0",
+                "--notes-file",
+                "notes.md",
+                "--remote",
+                "upstream",
+                "--state-file",
+                "/tmp/state.json",
+            ]
         )
         self.assertEqual(args.remote, "upstream")
+        self.assertEqual(args.state_file, "/tmp/state.json")
+        self.assertIsNone(args.target_commit)
 
 
 if __name__ == "__main__":
