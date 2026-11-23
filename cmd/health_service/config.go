@@ -58,7 +58,7 @@ var cfg Config
 
 func getBuildVersion() string {
 	if buildVersion == "" || buildVersion == "redacted" || buildVersion == "{STABLE_APP_VERSION}" {
-		return "developer-build"
+		return "0.0.0"
 	}
 	return buildVersion
 }

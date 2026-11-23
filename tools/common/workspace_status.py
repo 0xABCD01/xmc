@@ -28,7 +28,7 @@ def _default_version_file() -> Path:
 
 
 DEFAULT_VERSION_FILE = _default_version_file()
-FALLBACK_VERSION = "developer-build"
+FALLBACK_VERSION = "0.0.0"
 
 
 def read_version(version_file: Path = DEFAULT_VERSION_FILE) -> str:
