@@ -58,13 +58,13 @@ class DevEnvCliTest(unittest.TestCase):
     def test_parser_version_output(self) -> None:
         """Verifies --version flag outputs the repository version."""
         version_stream = io.StringIO()
-        with patch.object(dev_env, "resolve_version", return_value="1.2.0-dev"):
+        with patch.object(dev_env, "resolve_version", return_value="1.1.0"):
             parser = dev_env.create_parser()
         with self.assertRaises(SystemExit) as cm:
             with patch("sys.stdout", version_stream):
                 parser.parse_args(["--version"])
         self.assertEqual(cm.exception.code, 0)
-        self.assertIn("dev_env 1.2.0-dev", version_stream.getvalue())
+        self.assertIn("dev_env 1.1.0", version_stream.getvalue())
 
     def test_parser_version_fallback(self) -> None:
         """Verifies --version falls back cleanly without stderr noise when VERSION cannot be read."""
