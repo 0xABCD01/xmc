@@ -173,7 +173,7 @@ func TestGetHealthStatus(t *testing.T) {
 				ProjectID:        "test-project",
 				AppVersion:       "test-version-1.2.3",
 				BuildVersion:     "test-build-version-4.5.6",
-				ImageTag:         "nightly-2026-11-19.130",
+				ImageTag:         "v1.2.3",
 				ObservabilityURL: "http://test-observability-url",
 			},
 			mockResult: RunChecksResult{
@@ -194,7 +194,7 @@ func TestGetHealthStatus(t *testing.T) {
 			expectedSystemInfo: &spb.SystemInfo{
 				AppVersion:         "test-version-1.2.3",
 				BuildVersion:       "test-build-version-4.5.6",
-				ImageTag:           "nightly-2026-11-19.130",
+				ImageTag:           "v1.2.3",
 				ObservabilityUrl:   "http://test-observability-url",
 				EssDbSchemaVersion: "6",
 				XidDbSchemaVersion: "1",
