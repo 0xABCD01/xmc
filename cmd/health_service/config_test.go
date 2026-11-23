@@ -121,8 +121,8 @@ func TestGetBuildVersion(t *testing.T) {
 
 	for _, placeholder := range []string{"", "redacted", "{STABLE_APP_VERSION}"} {
 		buildVersion = placeholder
-		if got := getBuildVersion(); got != "0.0.0" {
-			t.Errorf("getBuildVersion() with %q = %q, want %q", placeholder, got, "0.0.0")
+		if got := getBuildVersion(); got != fallbackBuildVersion {
+			t.Errorf("getBuildVersion() with %q = %q, want %q", placeholder, got, fallbackBuildVersion)
 		}
 	}
 

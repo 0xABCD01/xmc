@@ -52,13 +52,15 @@ type Config struct {
 	SchedulingResumeMaxBacklog int
 }
 
+const fallbackBuildVersion = "0.0.0"
+
 var buildVersion string
 
 var cfg Config
 
 func getBuildVersion() string {
 	if buildVersion == "" || buildVersion == "redacted" || buildVersion == "{STABLE_APP_VERSION}" {
-		return "0.0.0"
+		return fallbackBuildVersion
 	}
 	return buildVersion
 }

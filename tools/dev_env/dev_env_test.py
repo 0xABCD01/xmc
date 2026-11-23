@@ -20,6 +20,7 @@ import logging
 import unittest
 from unittest.mock import MagicMock, patch
 
+from tools.common.workspace_status import FALLBACK_VERSION
 from tools.dev_env import dev_env
 from tools.dev_env.config import LocalDevConfig
 
@@ -79,7 +80,7 @@ class DevEnvCliTest(unittest.TestCase):
             with patch("sys.stdout", fallback_stream), patch("sys.stderr", err_stream):
                 fallback_parser.parse_args(["--version"])
         self.assertEqual(cm.exception.code, 0)
-        self.assertIn("0.0.0", fallback_stream.getvalue())
+        self.assertIn(FALLBACK_VERSION, fallback_stream.getvalue())
         self.assertEqual(err_stream.getvalue(), "")
 
     def test_main_no_args_prints_help_and_exits(self) -> None:
