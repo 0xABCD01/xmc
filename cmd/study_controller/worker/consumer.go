@@ -25,9 +25,9 @@ import (
 )
 
 // defaultDrainTimeout bounds how long Close waits for the worker and cleanup loops. It covers the
-// 2s XREADGROUP block of the worker loop plus redisclient.SettleTimeout, so a tick being settled
-// when Close is called finishes before the client is closed.
-const defaultDrainTimeout = redisclient.SettleTimeout + 3*time.Second
+// 2s XREADGROUP block of the worker loop, defaultReleaseTimeout, and redisclient.SettleTimeout, so
+// a tick being settled when Close is called finishes before the client is closed.
+const defaultDrainTimeout = redisclient.SettleTimeout + defaultReleaseTimeout + 3*time.Second
 
 // NewRedisConsumer returns a Redis consumer of the study reconcile stream for the Redis server at
 // addr. It reads the password from REDIS_PASSWORD and connects lazily. Context deadlines bound its
@@ -46,7 +46,7 @@ func NewRedisConsumer(addr string) *redisclient.ConsumerClient {
 	)
 }
 
-// Consumer runs the worker and cleanup loops of a Redis consumer with handleTask as its handler.
+// Consumer runs the worker and cleanup loops of a Redis consumer with Handler.HandleTask.
 type Consumer struct {
 	client       redisclient.Consumer
 	cancel       context.CancelFunc
@@ -56,12 +56,12 @@ type Consumer struct {
 	closeErr     error // result of the first Close, returned by every call
 }
 
-// Start sets handleTask on client and runs its worker and cleanup loops until ctx is done or Close
-// is called. The loops create the stream and consumer group themselves, at start-up and again
-// whenever Redis reports them missing (NOGROUP), so Start never blocks on Redis and consumption
-// resumes after Redis comes back without them.
-func Start(ctx context.Context, client redisclient.Consumer) *Consumer {
-	client.SetTaskHandler(handleTask)
+// Start sets handler.HandleTask on client and runs its worker and cleanup loops until ctx is done
+// or Close is called. The loops create the stream and consumer group themselves, at start-up and
+// again whenever Redis reports them missing (NOGROUP), so Start never blocks on Redis and
+// consumption resumes after Redis comes back without them.
+func Start(ctx context.Context, client redisclient.Consumer, handler *Handler) *Consumer {
+	client.SetTaskHandler(handler.HandleTask)
 	loopCtx, cancel := context.WithCancel(ctx)
 	c := &Consumer{client: client, cancel: cancel, drainTimeout: defaultDrainTimeout}
 	workerID := redisclient.HostConsumerName(constants.StudyControllerWorkerID)
@@ -84,7 +84,7 @@ func (c *Consumer) runLoop(loop func()) {
 }
 
 // Close stops the loops and closes the Redis client. It waits for the loops to return, but at
-// most the drain timeout (8s) and only until ctx is done; after that it logs a warning and closes
+// most the drain timeout (10s) and only until ctx is done; after that it logs a warning and closes
 // the client anyway, leaving a stuck loop to fail on the closed client. A tick being handled when
 // Close is called is still acknowledged or retried. Every call returns the first call's error.
 func (c *Consumer) Close(ctx context.Context) error {

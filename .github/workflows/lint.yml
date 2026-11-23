@@ -72,6 +72,13 @@ jobs:
               - 'tools/common/tool_utils.py'
               - '.github/workflows/nightly-examples-e2e.yml'
               - '.github/workflows/lint.yml'
+            nonui_js:
+              - '.github/scripts/**/*.js'
+              - 'tools/nightly_tests/**/*.js'
+              - 'cmd/experiment_state_server/static/**/*.js'
+              - 'tools/lint/eslint.nonui.config.mjs'
+              - 'cmd/ui/package-lock.json'
+              - '.github/workflows/lint.yml'
 
       # 1. Python Linting (Ruff & Mypy)
       - name: 'Set up Python 3.13'
@@ -82,7 +89,7 @@ jobs:
       - name: 'Install Ruff'
         run: |
           if ! command -v ruff &>/dev/null; then
-            pip install --no-cache-dir ruff
+            pip install --no-cache-dir ruff==0.16.4
           fi
 
       - name: 'Run Ruff Lint Check'
@@ -94,7 +101,7 @@ jobs:
       - name: 'Install Mypy'
         run: |
           if ! command -v mypy &>/dev/null; then
-            pip install --no-cache-dir mypy
+            pip install --no-cache-dir mypy==2.4.1
           fi
 
       - name: 'Run Mypy Static Type Check'
@@ -105,7 +112,7 @@ jobs:
       - name: 'Set up Go'
         uses: 'actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34' # v5.3.0
         with:
-          go-version: '1.26.0'
+          go-version: '1.26.11'
           cache: false
 
       - name: 'Verify Go Formatting (gofmt)'
@@ -162,6 +169,12 @@ jobs:
         run: |
           python3 tools/lint/check_agent_doc_paths.py
 
+      - name: 'Check Documentation Links & OSS URLs'
+        env:
+          XMC_BYPASS_VENV: '1'
+        run: |
+          python3 tools/lint/check_doc_links.py
+
       - name: 'Check UI & Workflow File Naming'
         env:
           XMC_BYPASS_VENV: '1'
@@ -173,6 +186,13 @@ jobs:
           XMC_BYPASS_VENV: '1'
         run: |
           python3 tools/lint/check_ui_selector_contract.py
+
+      - name: 'Check ESS Migration Ordering'
+        env:
+          XMC_BYPASS_VENV: '1'
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: |
+          python3 tools/lint/check_migration_order.py --base-ref "origin/${BASE_REF}"
 
       - name: 'Verify Go Dependencies (go mod tidy)'
         run: |
@@ -187,9 +207,19 @@ jobs:
             curl -sSfL https://github.com/bazelbuild/buildtools/releases/download/v8.0.3/buildifier-linux-amd64 -o "$GOPATH_BIN/buildifier"
             chmod +x "$GOPATH_BIN/buildifier"
           fi
-          BAZEL_FILES=$(find . -type f \( -name "BUILD" -o -name "BUILD.bazel" -o -name "*.bzl" -o -name "WORKSPACE" -o -name "MODULE.bazel" \) -not -path "*/node_modules/*")
-          if [ -n "$BAZEL_FILES" ]; then
-            buildifier -lint=warn -warnings=unused-variable -mode=check $BAZEL_FILES
+          mapfile -d '' -t BAZEL_FILES < <(git -c core.quotePath=false ls-files -z --cached --others --exclude-standard -- \
+            'BUILD' ':(glob)**/BUILD' 'BUILD.bazel' ':(glob)**/BUILD.bazel' '*.bzl' ':(glob)**/*.bzl' 'WORKSPACE' 'MODULE.bazel' \
+            | sort -zu)
+          wait "$!"
+          # LANG_proto_library-single-deps and inline-deps are Google-internal buildifier warnings
+          # (unrecognized by upstream OSS buildifier, e.g., CI v8.0.3), so only exclude them when supported.
+          BUILDIFIER_WARN_ARGS=()
+          GOOGLE_WARNINGS="-LANG_proto_library-single-deps,-inline-deps"
+          if buildifier -lint=warn -warnings="${GOOGLE_WARNINGS}" -mode=check -type=build </dev/null >/dev/null 2>&1; then
+            BUILDIFIER_WARN_ARGS=(-warnings="${GOOGLE_WARNINGS}")
+          fi
+          if [ "${#BAZEL_FILES[@]}" -gt 0 ]; then
+            buildifier -lint=warn ${BUILDIFIER_WARN_ARGS[@]+"${BUILDIFIER_WARN_ARGS[@]}"} -mode=check "${BAZEL_FILES[@]}"
           fi
 
       - name: 'Install & Run addlicense'
@@ -212,9 +242,36 @@ jobs:
             -ignore "go.sum" \
             .
 
+      # 2a. GitHub Actions Workflow & Shell Linting
+      - name: 'Run ShellCheck on Shell Scripts'
+        run: |
+          if ! command -v shellcheck &>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+          fi
+          mapfile -d '' -t SHELL_FILES < <(git -c core.quotePath=false ls-files -z -- '*.sh' '*.bash')
+          wait "$!"
+          if [ "${#SHELL_FILES[@]}" -gt 0 ]; then
+            shellcheck -S style -e SC1091 -- "${SHELL_FILES[@]}"
+          fi
+
+      - name: 'Cache actionlint binary'
+        uses: 'actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf' # v4.2.2
+        with:
+          path: ~/go/bin/actionlint
+          key: ${{ runner.os }}-actionlint-bin-v1.7.12-go1.26
+
+      - name: 'Install & Run actionlint'
+        run: |
+          GOPATH_BIN="$(go env GOPATH)/bin"
+          if [ ! -x "${GOPATH_BIN}/actionlint" ]; then
+            echo "--> Installing actionlint (v1.7.12)..."
+            go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          fi
+          "${GOPATH_BIN}/actionlint"
+
       # 3. UI Linting & Formatting (Prettier & ESLint)
       - name: 'Set up Node.js'
-        if: steps.changes.outputs.ui == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.ui == 'true' || steps.changes.outputs.nonui_js == 'true'
         uses: 'actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a' # v4.2.0
         with:
           node-version: '22'
@@ -222,7 +279,7 @@ jobs:
           cache-dependency-path: 'cmd/ui/package-lock.json'
 
       - name: 'Install UI Dependencies'
-        if: steps.changes.outputs.ui == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.ui == 'true' || steps.changes.outputs.nonui_js == 'true'
         run: npm ci --prefer-offline --no-audit
         working-directory: 'cmd/ui'
 
@@ -236,16 +293,41 @@ jobs:
         run: npm run lint
         working-directory: 'cmd/ui'
 
-      # 3a. GitHub Actions Script Tests (node:test, no dependencies)
-      - name: 'Set up Node.js for GitHub Actions scripts'
-        if: steps.changes.outputs.github_scripts == 'true'
+      - name: 'Run TypeScript Typecheck'
+        if: steps.changes.outputs.ui == 'true'
+        run: npm run typecheck
+        working-directory: 'cmd/ui'
+
+      - name: 'Run ESLint on Non-UI JS Scripts'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.nonui_js == 'true'
+        run: |
+          mapfile -d '' -t NONUI_JS_FILES < <(git -c core.quotePath=false ls-files -z -- \
+            ':(glob).github/scripts/**/*.js' \
+            ':(glob)tools/nightly_tests/**/*.js' \
+            ':(glob)cmd/experiment_state_server/static/**/*.js')
+          wait "$!"
+          if [ "${#NONUI_JS_FILES[@]}" -gt 0 ]; then
+            ./cmd/ui/node_modules/.bin/eslint --no-config-lookup -c tools/lint/eslint.nonui.config.mjs -- "${NONUI_JS_FILES[@]}"
+          fi
+
+      # 3a. GitHub Actions & Nightly JS Script Tests (node:test, no dependencies)
+      - name: 'Set up Node.js for JS Script Tests'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.github_scripts == 'true' || steps.changes.outputs.examples_coverage == 'true'
         uses: 'actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a' # v4.2.0
         with:
           node-version: '22'
 
-      - name: 'Run GitHub Actions script tests'
-        if: steps.changes.outputs.github_scripts == 'true'
-        run: node --test .github/scripts/*.test.js
+      - name: 'Run GitHub Actions Script Tests'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.github_scripts == 'true'
+        run: |
+          shopt -s failglob
+          node --test .github/scripts/*.test.js
+
+      - name: 'Run Nightly JS Script Tests'
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.examples_coverage == 'true'
+        run: |
+          shopt -s failglob
+          node --test tools/nightly_tests/*_test.js
 
       # 4. Terraform Formatting, Linting & Security (conditional on Terraform file changes)
       - name: 'Set up Terraform'
@@ -287,9 +369,9 @@ jobs:
       - name: 'Install Helm'
         if: steps.changes.outputs.helm == 'true'
         run: |
-          if ! command -v helm &>/dev/null; then
+          if ! helm version --short 2>/dev/null | grep -q '^v3\.'; then
             mkdir -p "${RUNNER_TEMP}/helm"
-            curl -sSfL "https://get.helm.sh/helm-v3.15.2-linux-amd64.tar.gz" \
+            curl -sSfL "https://get.helm.sh/helm-v3.20.1-linux-amd64.tar.gz" \
               | tar -xz -C "${RUNNER_TEMP}/helm" --strip-components=1 linux-amd64/helm
             chmod +x "${RUNNER_TEMP}/helm/helm"
             echo "${RUNNER_TEMP}/helm" >> "${GITHUB_PATH}"
@@ -312,3 +394,17 @@ jobs:
           severity: 'HIGH,CRITICAL'
           scan-ref: 'deploy/'
           trivyignores: '.trivyignore'
+
+      # 8. PR Diff Size Telemetry
+      - name: 'Check PR Diff Size'
+        if: github.event_name == 'pull_request'
+        env:
+          XMC_BYPASS_VENV: '1'
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          DIFF_JSON="$(python3 tools/analyze_diff_size.py --base-ref "origin/${BASE_REF}...")"
+          echo "${DIFF_JSON}"
+          if [ "$(echo "${DIFF_JSON}" | jq -r '.result.threshold_exceeded')" = 'true' ]; then
+            REASONS="$(echo "${DIFF_JSON}" | jq -r '.result.exceeded_reasons | join("; ")')"
+            echo "::warning::PR diff size exceeds review threshold: ${REASONS}"
+          fi

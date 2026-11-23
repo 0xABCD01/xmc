@@ -19,6 +19,9 @@ const path = require('path');
 const os = require('os');
 
 const {
+  ALERT_PROFILES,
+  resolveAlertProfile,
+  resolveJobResults,
   parseUsernames,
   filterActiveOwners,
   resolveActiveOwners,
@@ -85,39 +88,33 @@ describe('filterActiveOwners', () => {
 });
 
 describe('resolveActiveOwners', () => {
-  test('reads files from disk and filters active owners', () => {
+  test('reads OWNERS from disk and filters active owners using ABSENCE_LIST content', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-resolve-owners-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
 
     try {
       fs.writeFileSync(ownersFile, 'User1\nUser2\nUser3\n');
-      fs.writeFileSync(absenceFile, 'User2\n');
 
-      const active = resolveActiveOwners(ownersFile, absenceFile, { info: () => {}, warning: () => {} });
+      const active = resolveActiveOwners(ownersFile, 'User2\n', { info: () => {}, warning: () => {} });
       assert.deepEqual(active, ['User1', 'User3']);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  test('respects scheduled DD.MM.YYYY-DD.MM.YYYY date ranges and logs warnings for invalid lines in ABSENCE.md', () => {
+  test('respects scheduled DD.MM.YYYY-DD.MM.YYYY date ranges and logs warnings for invalid lines in ABSENCE_LIST', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-resolve-owners-range-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
+    const absenceContent = 'User2\nUser3 10.11.2026-15.11.2026\nUser1 31.02.2026-15.03.2026\n';
     const warnings = [];
     const mockCore = { info: () => {}, warning: (msg) => warnings.push(msg) };
 
     try {
       fs.writeFileSync(ownersFile, 'User1\nUser2\nUser3\n');
-      fs.writeFileSync(
-        absenceFile,
-        'User2\nUser3 10.11.2026-15.11.2026\nUser1 31.02.2026-15.03.2026\n'
-      );
 
       // Before User3's absence window: User3 is active, User2 is unconditionally absent
       assert.deepEqual(
-        resolveActiveOwners(ownersFile, absenceFile, mockCore, new Date('2026-11-09T12:00:00Z')),
+        resolveActiveOwners(ownersFile, absenceContent, mockCore, new Date('2026-11-09T12:00:00Z')),
         ['User1', 'User3']
       );
       assert.equal(warnings.length, 1);
@@ -125,19 +122,19 @@ describe('resolveActiveOwners', () => {
 
       // On start boundary (2026-11-10 UTC): both User2 and User3 are absent
       assert.deepEqual(
-        resolveActiveOwners(ownersFile, absenceFile, mockCore, new Date('2026-11-10T00:00:00Z')),
+        resolveActiveOwners(ownersFile, absenceContent, mockCore, new Date('2026-11-10T00:00:00Z')),
         ['User1']
       );
 
       // On end boundary (2026-11-15 UTC): both User2 and User3 are absent
       assert.deepEqual(
-        resolveActiveOwners(ownersFile, absenceFile, mockCore, new Date('2026-11-15T23:59:59Z')),
+        resolveActiveOwners(ownersFile, absenceContent, mockCore, new Date('2026-11-15T23:59:59Z')),
         ['User1']
       );
 
       // After User3's absence window (2026-11-16 UTC): User3 is active again
       assert.deepEqual(
-        resolveActiveOwners(ownersFile, absenceFile, mockCore, new Date('2026-11-16T00:00:00Z')),
+        resolveActiveOwners(ownersFile, absenceContent, mockCore, new Date('2026-11-16T00:00:00Z')),
         ['User1', 'User3']
       );
     } finally {
@@ -145,7 +142,7 @@ describe('resolveActiveOwners', () => {
     }
   });
 
-  test('handles missing owners and absence files gracefully', () => {
+  test('handles missing owners file and empty absence content gracefully', () => {
     let warningLogged = false;
     const mockCore = {
       info: () => {},
@@ -153,7 +150,7 @@ describe('resolveActiveOwners', () => {
         if (msg.includes('not found')) warningLogged = true;
       },
     };
-    const active = resolveActiveOwners('/nonexistent/OWNERS', '/nonexistent/ABSENCE.md', mockCore);
+    const active = resolveActiveOwners('/nonexistent/OWNERS', '', mockCore);
     assert.deepEqual(active, []);
     assert.ok(warningLogged);
   });
@@ -526,10 +523,8 @@ describe('run orchestrator', () => {
   test('creates new issue when no open nightly failure issue exists', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-test-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
 
     fs.writeFileSync(ownersFile, 'Alice\nBob\nCharlie\n');
-    fs.writeFileSync(absenceFile, 'Bob\n');
 
     const origNeedsContext = process.env.NEEDS_CONTEXT;
     const origXid = process.env.XID;
@@ -578,7 +573,7 @@ describe('run orchestrator', () => {
         context: mockContext,
         core: mockCore,
         ownersPath: ownersFile,
-        absencePath: absenceFile,
+        absenceContent: 'Bob\n',
       });
 
       assert.equal(result.status, 'issue_created');
@@ -599,7 +594,6 @@ describe('run orchestrator', () => {
   test('adds comment to existing open issue when one already exists', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-test-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
 
     fs.writeFileSync(ownersFile, 'Alice\n');
 
@@ -640,7 +634,7 @@ describe('run orchestrator', () => {
         context: mockContext,
         core: mockCore,
         ownersPath: ownersFile,
-        absencePath: absenceFile,
+        absenceContent: '',
       });
 
       assert.equal(result.status, 'comment_created');
@@ -656,7 +650,6 @@ describe('run orchestrator', () => {
   test('ignores pull requests with nightly-failure label and creates a new issue', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-test-'));
     const ownersFile = path.join(tempDir, 'OWNERS');
-    const absenceFile = path.join(tempDir, 'ABSENCE.md');
 
     fs.writeFileSync(ownersFile, 'Alice\n');
 
@@ -701,13 +694,73 @@ describe('run orchestrator', () => {
         context: mockContext,
         core: mockCore,
         ownersPath: ownersFile,
-        absencePath: absenceFile,
+        absenceContent: '',
       });
 
       assert.equal(result.status, 'issue_created');
       assert.equal(result.issueNumber, 43);
       assert.ok(createdIssue);
     } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('reads process.env.ABSENCE_LIST when absenceContent is omitted', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-env-test-'));
+    const ownersFile = path.join(tempDir, 'OWNERS');
+
+    fs.writeFileSync(ownersFile, 'Alice\nBob\nCharlie\n');
+
+    const origAbsenceList = process.env.ABSENCE_LIST;
+    let createdIssue = null;
+    const mockGithub = {
+      rest: {
+        repos: {
+          listPullRequestsAssociatedWithCommit: async () => ({ data: [] }),
+        },
+        issues: {
+          listForRepo: async () => ({ data: [] }),
+          create: async (payload) => {
+            createdIssue = payload;
+            return { data: { number: 44 } };
+          },
+          createComment: async () => assert.fail('Should not create comment when no issue exists'),
+        },
+      },
+    };
+
+    const mockContext = {
+      repo: { owner: 'google', repo: 'xmc' },
+      runId: 1000,
+      sha: 'aabbccdd11223344556677889900aabbccddeeff',
+      ref: 'refs/heads/main',
+      eventName: 'schedule',
+    };
+
+    const mockCore = {
+      info: () => {},
+      warning: () => {},
+      setFailed: () => {},
+    };
+
+    try {
+      process.env.ABSENCE_LIST = 'Bob\n';
+      const result = await run({
+        github: mockGithub,
+        context: mockContext,
+        core: mockCore,
+        ownersPath: ownersFile,
+      });
+
+      assert.equal(result.status, 'issue_created');
+      assert.ok(createdIssue.body.includes('@Alice @Charlie'));
+      assert.ok(!createdIssue.body.includes('@Bob'));
+    } finally {
+      if (origAbsenceList === undefined) {
+        delete process.env.ABSENCE_LIST;
+      } else {
+        process.env.ABSENCE_LIST = origAbsenceList;
+      }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -776,4 +829,179 @@ describe('resolveTriggerOutcome', () => {
       assert.equal(resolveTriggerOutcome(needs), expected);
     });
   }
+});
+
+describe('resolveAlertProfile', () => {
+  test('defaults to the examples-e2e profile', () => {
+    assert.equal(resolveAlertProfile(undefined), ALERT_PROFILES['examples-e2e']);
+    assert.equal(resolveAlertProfile(''), ALERT_PROFILES['examples-e2e']);
+  });
+
+  test('returns the named profile', () => {
+    assert.equal(resolveAlertProfile('unit-tests'), ALERT_PROFILES['unit-tests']);
+  });
+
+  test('throws for an unknown profile name', () => {
+    assert.throws(() => resolveAlertProfile('nope'), /Unknown ALERT_PROFILE 'nope'; expected one of: examples-e2e, unit-tests/);
+  });
+
+  test('gives every profile a distinct issue label', () => {
+    const labels = Object.values(ALERT_PROFILES).map(p => p.labelName);
+    assert.equal(new Set(labels).size, labels.length);
+  });
+});
+
+describe('resolveJobResults', () => {
+  const cases = [
+    {
+      name: 'lists every job result in order',
+      needs: { 'unit-tests': { result: 'failure' }, other: { result: 'success' } },
+      expected: [['unit-tests', 'failure'], ['other', 'success']],
+    },
+    { name: 'reports unknown for a job without a result', needs: { 'unit-tests': {} }, expected: [['unit-tests', 'unknown']] },
+    { name: 'returns no rows for empty context', needs: {}, expected: [] },
+    { name: 'returns no rows for null context', needs: null, expected: [] },
+  ];
+  for (const { name, needs, expected } of cases) {
+    test(name, () => {
+      assert.deepEqual(resolveJobResults(needs), expected);
+    });
+  }
+});
+
+describe('unit-tests alert profile', () => {
+  const baseParams = {
+    owner: 'google',
+    repo: 'xmc',
+    runId: 42,
+    sha: 'abcdef1234567890abcdef1234567890abcdef12',
+    activeOwners: ['userA'],
+    profile: ALERT_PROFILES['unit-tests'],
+  };
+
+  test('formats job results instead of examples E2E fields', () => {
+    const body = formatFailureIssueBody({ ...baseParams, jobResults: [['unit-tests', 'failure']] });
+
+    assert.ok(body.startsWith('### 🧪 Nightly Uncached Unit Tests Failed'));
+    assert.ok(body.includes('--nocache_test_results'));
+    assert.ok(body.includes('| **unit-tests** | `failure` |'));
+    assert.ok(!body.includes('Experiment XID'));
+    assert.ok(!body.includes('Trigger Action'));
+    assert.ok(body.includes('cc @userA'));
+  });
+
+  test('reports unknown jobs when no job results are available', () => {
+    const body = formatFailureIssueBody(baseParams);
+    assert.ok(body.includes('| **Jobs** | `unknown` |'));
+  });
+
+  test('buildAlertParams carries the profile and job results', () => {
+    const context = { repo: { owner: 'google', repo: 'xmc' }, runId: 1, sha: baseParams.sha };
+    const params = buildAlertParams(context, [], null, { 'unit-tests': { result: 'failure' } }, ALERT_PROFILES['unit-tests']);
+    assert.equal(params.profile, ALERT_PROFILES['unit-tests']);
+    assert.deepEqual(params.jobResults, [['unit-tests', 'failure']]);
+  });
+
+  /**
+   * Runs the alert orchestrator with a temp OWNERS file, a failed unit-tests NEEDS_CONTEXT, and
+   * an Octokit double. existingIssues is what the label query returns; every call is recorded.
+   * Environment overrides are applied for the duration of the run and restored afterwards.
+   */
+  async function runUnitTestsAlert({ existingIssues = [], runArgs = {}, env = {} }) {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xmc-alert-test-'));
+    const ownersFile = path.join(tempDir, 'OWNERS');
+    fs.writeFileSync(ownersFile, 'Alice\n');
+    const overrides = { NEEDS_CONTEXT: JSON.stringify({ 'unit-tests': { result: 'failure' } }), ...env };
+    const saved = Object.fromEntries(Object.keys(overrides).map(k => [k, process.env[k]]));
+    Object.assign(process.env, overrides);
+
+    const calls = { queriedLabel: null, createdIssue: null, createdComment: null };
+    const mockGithub = {
+      rest: {
+        repos: { listPullRequestsAssociatedWithCommit: async () => ({ data: [] }) },
+        issues: {
+          listForRepo: async ({ labels }) => {
+            calls.queriedLabel = labels;
+            return { data: existingIssues };
+          },
+          create: async (payload) => {
+            if (existingIssues.length > 0) assert.fail('Should not create an issue when one is open');
+            calls.createdIssue = payload;
+            return { data: { number: 7 } };
+          },
+          createComment: async (payload) => {
+            if (existingIssues.length === 0) assert.fail('Should not create comment when no issue exists');
+            calls.createdComment = payload;
+            return { data: { id: 1 } };
+          },
+        },
+      },
+    };
+    const mockContext = { repo: { owner: 'google', repo: 'xmc' }, runId: 9, sha: baseParams.sha, ref: 'refs/heads/main', eventName: 'schedule' };
+
+    try {
+      const result = await run({
+        github: mockGithub,
+        context: mockContext,
+        core: { info: () => {}, warning: () => {} },
+        ownersPath: ownersFile,
+        absenceContent: '',
+        ...runArgs,
+      });
+      return { result, ...calls };
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  test('run files the alert under the unit-tests label and title', async () => {
+    const { result, queriedLabel, createdIssue } = await runUnitTestsAlert({ runArgs: { profileName: 'unit-tests' } });
+
+    assert.deepEqual(result, { status: 'issue_created', issueNumber: 7 });
+    assert.equal(queriedLabel, 'nightly-unit-test-failure');
+    assert.deepEqual(createdIssue.labels, ['nightly-unit-test-failure', 'bug']);
+    assert.ok(createdIssue.title.startsWith('🚨 Nightly Uncached Unit Test Failure ('));
+    assert.ok(createdIssue.body.includes('| **unit-tests** | `failure` |'));
+    assert.ok(createdIssue.body.includes('@Alice'));
+  });
+
+  test('run selects the unit-tests profile from process.env.ALERT_PROFILE as the workflow does', async () => {
+    const { result, queriedLabel, createdIssue } = await runUnitTestsAlert({ env: { ALERT_PROFILE: 'unit-tests' } });
+
+    assert.deepEqual(result, { status: 'issue_created', issueNumber: 7 });
+    assert.equal(queriedLabel, 'nightly-unit-test-failure');
+    assert.deepEqual(createdIssue.labels, ['nightly-unit-test-failure', 'bug']);
+    assert.ok(createdIssue.body.startsWith('### 🧪 Nightly Uncached Unit Tests Failed'));
+  });
+
+  test('run comments on the open nightly-unit-test-failure issue for a recurring failure', async () => {
+    const { result, queriedLabel, createdComment } = await runUnitTestsAlert({
+      existingIssues: [{ number: 31, pull_request: { url: 'pr' } }, { number: 30 }],
+      env: { ALERT_PROFILE: 'unit-tests' },
+    });
+
+    assert.deepEqual(result, { status: 'comment_created', issueNumber: 30 });
+    assert.equal(queriedLabel, 'nightly-unit-test-failure');
+    assert.equal(createdComment.issue_number, 30);
+    assert.ok(createdComment.body.startsWith('### 🚨 Recurring Nightly Test Failure Detected'));
+    assert.ok(createdComment.body.includes('| **unit-tests** | `failure` |'));
+  });
+
+  test('run rejects an unknown process.env.ALERT_PROFILE', async () => {
+    const origProfile = process.env.ALERT_PROFILE;
+    process.env.ALERT_PROFILE = 'nope';
+    try {
+      await assert.rejects(
+        run({ github: {}, context: { repo: { owner: 'google', repo: 'xmc' } }, core: null }),
+        /Unknown ALERT_PROFILE 'nope'/
+      );
+    } finally {
+      if (origProfile === undefined) delete process.env.ALERT_PROFILE;
+      else process.env.ALERT_PROFILE = origProfile;
+    }
+  });
 });

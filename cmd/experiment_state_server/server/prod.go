@@ -103,7 +103,9 @@ func initTaskQueueClient(ctx context.Context, cfg *config.Config, oauthCfg *oaut
 	if err != nil {
 		return nil, fmt.Errorf("failed to load signing key: %w", err)
 	}
-	var opts []tq.Option
+	// Context deadlines bound the task queue's socket I/O, so a hung Redis fails an enqueue at the
+	// RPC deadline instead of the client's fixed read and write timeouts.
+	opts := []tq.Option{tq.WithRedisContextTimeout()}
 	if oauthCfg != nil && oauthCfg.IsNonProdAuth() && oauthCfg.TokenURL != "" && oauthCfg.ClientID != "" {
 		opts = append(opts, tq.WithTokenProvider(tq.NewOidcTokenProvider(tq.OidcTokenProviderConfig{
 			TokenURL:     oauthCfg.TokenURL,

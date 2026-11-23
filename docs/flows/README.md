@@ -7,6 +7,7 @@ Sequence-level documentation for XMC's principal request, actuation, and observa
 | Document | Covers |
 | :--- | :--- |
 | [Experiment Lifecycle](experiment_lifecycle.md) | Creating, reading, updating, and listing experiments; launch state; status; artifacts; status messages. |
+| [Study Lifecycle](study_lifecycle.md) | Hyperparameter Optimization (`STUDY`) runtime topology, reconcile tick stream, and per-study Redis lease locking. |
 | [Work Unit Lifecycle](work_unit_lifecycle.md) | Creating, stopping, restarting, and updating work units — the asynchronous actuation path end to end, plus global pause and resume scheduling. |
 | [Reconciliation](reconciliation.md) | How cluster state becomes persisted work unit state: JobSet and ClusterQueue reconcilers, Kueue sync worker, and the batcher. |
 | [Metrics & Observability](metrics_and_observability.md) | The metrics pipeline from training job to dashboard, plus logs, health, and resource observability. |
@@ -78,8 +79,10 @@ sequenceDiagram
 ```
 
 Any RPC that must change the cluster takes this shape: `CreateWorkUnit`, `StopWorkUnit`,
-`RestartWorkUnit`, `UpdateWorkUnit`, and the two batch variants `BatchStopWorkUnits` and
-`BatchRestartWorkUnits`. The client's response arrives before the cluster has changed; convergence
+`RestartWorkUnit`, `UpdateWorkUnit`, the two batch variants `BatchStopWorkUnits` and
+`BatchRestartWorkUnits`, and `BatchCreateWorkUnits`, which creates the trials of a study and enqueues
+their tasks in one pipelined round trip. The client's response arrives before the cluster has
+changed; convergence
 is observed either by polling the returned `google.longrunning.Operation` or by watching the work
 unit's state.
 
@@ -87,7 +90,10 @@ unit's state.
 an `Operation`, because the metadata change is committed synchronously and only the consequence —
 re-labelling the JobSet's priority class — is queued. The asynchrony is real, but there is no
 operation to poll. See
-[Work Unit Lifecycle §5](work_unit_lifecycle.md#5-update-work-unit).
+[Work Unit Lifecycle §5](work_unit_lifecycle.md#5-update-work-unit). `BatchCreateWorkUnits` also
+answers with the created `WorkUnit`s; each still gets an operation that the Actuator completes,
+unless its task cannot be enqueued, in which case ESS itself stops the operation with `INTERNAL`.
+See [Batch create for studies](work_unit_lifecycle.md#batch-create-for-studies).
 
 ---
 

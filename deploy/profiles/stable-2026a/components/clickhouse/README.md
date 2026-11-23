@@ -17,7 +17,7 @@ The following fields are structural constants encapsulated in [`templates/compon
 | `metadata.labels["app.kubernetes.io/name"]` | `"clickhouse"` | Standard Kubernetes application label. |
 | `spec.componentType` | `COMPONENT_TYPE_CUSTOM_3P_WRAPPER` | Hardcoded as a 3P Wrapper Component (`ClickHouse` is always an external/third-party database service, never a 1P XMC microservice). |
 | `spec.componentClass` | `"analytical-db"` | Canonical service class used by XMC workloads to discover the analytical database. |
-| `spec.version` / `spec.chartVersion` | `.Chart.Version` (`"0.1.0"`) | Sourced strictly from [`Chart.yaml`](Chart.yaml) as the single source of truth. |
+| `spec.version` / `spec.chartVersion` | `.Chart.Version` (`"0.1.0"`) | Sourced strictly from [`Chart.yaml`](Chart.yaml) as the single source of truth (versions XMC's ClickHouse wrapper contract, **not** the upstream ClickHouse server version; see [`3p_component_contract_updates.md`](../../../../../docs/migrations/3p_component_contract_updates.md)). |
 
 ---
 
