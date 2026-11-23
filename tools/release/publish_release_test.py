@@ -312,19 +312,27 @@ class PublishReleaseTest(unittest.TestCase):
             self.assertIn("Update the root VERSION file to '1.3.0'", ctx.exception.instruction)
             mock_read.assert_called_once_with(ANY, "VERSION", ANY)
 
+        # Mismatched VERSION takes precedence over the prerelease guard.
+        with patch("tools.release.publish_release.get_git_file_content", return_value="1.2.0\n"):
+            with self.assertRaises(HandledError) as ctx:
+                publish_release(argparse.Namespace(tag="1.2.0-dev", **base_args))
+            self.assertIn("does not match release tag", str(ctx.exception))
+
         # Prerelease/-dev tags are rejected unless --prerelease is set.
         for pre_ver in ("1.2.0-dev", "1.2.0-dev.1", "1.2.0-rc.1"):
-            with patch(
-                "tools.release.publish_release.get_git_file_content", return_value=f"{pre_ver}\n"
-            ):
-                with self.assertRaises(HandledError) as ctx:
-                    publish_release(argparse.Namespace(tag=pre_ver, **base_args))
-                self.assertIn("prerelease/development version tag", str(ctx.exception))
-                self.assertIn("--tag", ctx.exception.instruction)
+            with self.subTest(pre_ver=pre_ver):
+                with patch(
+                    "tools.release.publish_release.get_git_file_content",
+                    return_value=f"{pre_ver}\n",
+                ):
+                    with self.assertRaises(HandledError) as ctx:
+                        publish_release(argparse.Namespace(tag=pre_ver, **base_args))
+                    self.assertIn("prerelease/development version tag", str(ctx.exception))
+                    self.assertIn("--tag", ctx.exception.instruction)
 
-                prerelease_args = {**base_args, "prerelease": True}
-                res = publish_release(argparse.Namespace(tag=pre_ver, **prerelease_args))
-                self.assertEqual(res["status"], "dry_run")
+                    prerelease_args = {**base_args, "prerelease": True}
+                    res = publish_release(argparse.Namespace(tag=pre_ver, **prerelease_args))
+                    self.assertEqual(res["status"], "dry_run")
 
         # Leading 'v' on tag matches bare SemVer in VERSION.
         with patch("tools.release.publish_release.get_git_file_content", return_value="1.2.0\n"):

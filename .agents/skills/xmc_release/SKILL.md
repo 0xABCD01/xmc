@@ -11,10 +11,16 @@ This skill guides an agent through preparing, validating, and publishing an XMC 
 > All execution steps in this skill MUST strictly adhere to the policy rules defined in [Core Engineering Standards](../../rules/core_engineering.md) and [Skills & Automation Guidelines](../../rules/skills_and_automation.md).
 
 ### Resumption & Phase Selection
-- **Idempotency & Recent Run Check**: If resuming an interrupted release or if `main` has already been deployed and tested today, verify that `git show "${TARGET_SHA}:VERSION"` matches the persisted release `version` (and is not a `-dev` version) and check for existing successful workflow runs targeting that commit before re-triggering using `--find-existing`:
+- **Idempotency & Recent Run Check**: If resuming an interrupted release or if `main` has already been deployed and tested today, load `TARGET_SHA` from `${STATE_FILE}`, verify that `git show "${TARGET_SHA}:VERSION"` matches the persisted release `version` (and is not a `-dev` version), and check for existing successful workflow runs targeting that commit before re-triggering using `--find-existing`:
   ```bash
   STATE_FILE="${ARTIFACT_DIR:-/tmp}/release_state.json"
-  TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}" 2>/dev/null || git rev-parse origin/main)
+  if [[ -z "${TARGET_SHA:-}" && -f "${STATE_FILE}" ]]; then
+    TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}")
+  fi
+  : "${TARGET_SHA:?Error: TARGET_SHA not set and not found in ${STATE_FILE}}"
+  if [[ -f "${STATE_FILE}" ]]; then
+    jq -r '.version // empty' "${STATE_FILE}"
+  fi
   git show "${TARGET_SHA}:VERSION"
 
   PYTHONPATH=. python3 tools/release/dispatch_and_watch.py \
@@ -23,12 +29,14 @@ This skill guides an agent through preparing, validating, and publishing an XMC 
     --find-existing \
     --state-file "${STATE_FILE}"
   ```
-- **Direct Entry**: If deployment and E2E tests have already succeeded for the target `TARGET_SHA` commit (whose `VERSION` matches the target release version), the agent may proceed directly to Phase 4 or Phase 5. Load `TARGET_SHA` from `"${STATE_FILE}"` if unset:
+- **Direct Entry**: If deployment and E2E tests have already succeeded for the target `TARGET_SHA` commit (whose `VERSION` matches the target release version), the agent may proceed directly to Phase 4 or Phase 5. Load `TARGET_SHA` from `"${STATE_FILE}"` if unset and verify `VERSION`:
   ```bash
   STATE_FILE="${STATE_FILE:-${ARTIFACT_DIR:-/tmp}/release_state.json}"
   if [[ -z "${TARGET_SHA:-}" && -f "${STATE_FILE}" ]]; then
-    TARGET_SHA=$(jq -r '.target_sha' "${STATE_FILE}")
+    TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}")
   fi
+  : "${TARGET_SHA:?Error: TARGET_SHA not set and not found in ${STATE_FILE}}"
+  git show "${TARGET_SHA}:VERSION"
   ```
 - **Post-Review Resumption**: When resuming after the user approval gate, proceed with executing the publishing step in Phase 5 using the release notes at `"${ARTIFACT_DIR:-/tmp}/release_notes_v<version>.md"` without re-running earlier phases.
 
@@ -54,12 +62,13 @@ This skill guides an agent through preparing, validating, and publishing an XMC 
      ```bash
      git show origin/main:VERSION
      ```
-     If `VERSION` does not yet equal `<version>` (for example, it still ends in `-dev` or needs a patch/major override), merge a `chore(version): bump VERSION to <version>` PR into `main` first and re-run `git fetch origin main --tags` so that nightly deployment, E2E verification, visual snapshots, and `publish_release.py` all pin the exact same commit.
+     If `VERSION` does not yet equal `<version>` (for example, it still ends in `-dev` or needs a patch/major override), follow the `VERSION` bump procedure in [Draft Generation & Interactive Review Gate](../xmc_generate_release_notes/SKILL.md#5-draft-generation--interactive-review-gate) so nightly deployment, E2E verification, visual snapshots, and `publish_release.py` all pin the exact same commit. *(If Phase 2 or Phase 3 aborts after the pre-release bump PR has merged, keep `VERSION` at `<version>` while fixing and retrying the release, or ask the user whether to open a Draft PR reverting `VERSION` to `<version>-dev` if the release is postponed.)*
   3. Resolve and persist `${TARGET_SHA}` and `<version>` to `"${ARTIFACT_DIR:-/tmp}/release_state.json"`:
      ```bash
+     VERSION="<version>"
      TARGET_SHA=$(git rev-parse origin/main)
      STATE_FILE="${ARTIFACT_DIR:-/tmp}/release_state.json"
-     echo "{\"target_sha\": \"${TARGET_SHA}\", \"version\": \"<version>\"}" > "${STATE_FILE}"
+     jq -n --arg sha "${TARGET_SHA}" --arg v "${VERSION}" '{target_sha: $sha, version: $v}' > "${STATE_FILE}"
      ```
 - Helper tools are executed via Python with `PYTHONPATH=.` configured.
 
@@ -196,11 +205,17 @@ PAGE_URL=$(echo "${VISUAL_RESPONSE}" | jq -r '.result.page_url // .page_url // e
 Delegate the end-to-end release documentation, interactive user review, and publishing workflow to [xmc_generate_release_notes](../xmc_generate_release_notes/SKILL.md):
 
 1. **Extract Metadata & Synthesize Notes**:
-   Follow [Release Range & Discovery](../xmc_generate_release_notes/SKILL.md#1-release-range--git-reference-discovery) and [Deterministic Metadata Extraction](../xmc_generate_release_notes/SKILL.md#2-deterministic-metadata-extraction--approved-flags-discovery).
-   Ensure `--target-ref "${TARGET_SHA}"` is explicitly passed to `extract_release_metadata.py` using the persisted `${TARGET_SHA}` from Prerequisites:
+   If `${TARGET_SHA}` did not change after Prerequisites, reuse `${ARTIFACT_DIR:-/tmp}/release_metadata.json` directly without re-prompting for approved flags. If a `chore(version)` bump PR advanced `${TARGET_SHA}`, re-run `extract_release_metadata.py` with `--target-ref "${TARGET_SHA}"` reusing `metadata.approved_flags` already confirmed in Prerequisites (do not re-prompt the user):
    ```bash
+   BASE_TAG="<base_tag>"
+   # Pass the exact flags confirmed in Prerequisites (omit --approved-flags if none)
+   STATE_FILE="${ARTIFACT_DIR:-/tmp}/release_state.json"
+   if [[ -z "${TARGET_SHA:-}" && -f "${STATE_FILE}" ]]; then
+     TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}")
+   fi
+   : "${TARGET_SHA:?Error: TARGET_SHA not set and not found in ${STATE_FILE}}"
    python3 ./tools/release/extract_release_metadata.py \
-       --base-ref <base_tag> \
+       --base-ref "${BASE_TAG}" \
        --target-ref "${TARGET_SHA}" \
        --approved-flags rod_deployment_enabled rodDeployment.enabled \
        --output "${ARTIFACT_DIR:-/tmp}/release_metadata.json"
@@ -208,16 +223,8 @@ Delegate the end-to-end release documentation, interactive user review, and publ
    Follow [Semantic Commit Classification](../xmc_generate_release_notes/SKILL.md#3-semantic-commit-classification--section-routing-agent-reasoning) and [Semantic Synthesis & Narrative Formatting](../xmc_generate_release_notes/SKILL.md#4-semantic-synthesis--narrative-formatting) to draft the release notes at `"${ARTIFACT_DIR:-/tmp}/release_notes_v<version>.md"`.
 
 2. **Interactive Review**:
-   Follow [Draft Generation & Interactive Review Gate](../xmc_generate_release_notes/SKILL.md#5-draft-generation--interactive-review-gate) to present the proposed version increment and draft notes to the user, refining content iteratively based on feedback. If the user changes the release version so that it differs from `git show "${TARGET_SHA}:VERSION"`, merge a corrective `chore(version): bump VERSION to <new_version>` PR, re-fetch `origin/main`, update `target_sha` and `version` in `"${STATE_FILE}"`, and restart from Phase 1 so all checks and the final tag verify the exact same commit.
+   Follow [Draft Generation & Interactive Review Gate](../xmc_generate_release_notes/SKILL.md#5-draft-generation--interactive-review-gate) to present the proposed version increment and draft notes to the user, refine content iteratively based on feedback, and handle any corrective `VERSION` bump (restarting from [Phase 1](#phase-1-deploy-newest-main-to-nightly) if the target commit changes).
 
 3. **Preflight Validation & Publishing Confirmation Gate**:
-   Before asking for user confirmation to publish, perform a non-mutating preflight dry-run targeting `${TARGET_SHA}`:
-   ```bash
-   PYTHONPATH=. python3 ./tools/release/publish_release.py --tag <version> --notes-file <path_to_markdown_file> --target-commit "${TARGET_SHA}" --dry-run
-   ```
-   Follow [Mandatory Confirmation Gate & Release Publishing](../xmc_generate_release_notes/SKILL.md#6-mandatory-confirmation-gate--release-publishing) to enforce the mandatory affirmative confirmation gate and the required post-release `VERSION` `-dev` bump.
-   Once approved by the user in chat, execute publication targeting `${TARGET_SHA}` with `--draft`:
-   ```bash
-   PYTHONPATH=. python3 ./tools/release/publish_release.py --tag <version> --notes-file <path_to_markdown_file> --target-commit "${TARGET_SHA}" --draft
-   ```
+   Follow [Preflight Validation (`--dry-run`)](../xmc_generate_release_notes/SKILL.md#5-draft-generation--interactive-review-gate) and [Mandatory Confirmation Gate & Release Publishing](../xmc_generate_release_notes/SKILL.md#6-mandatory-confirmation-gate--release-publishing) to run `--dry-run` against `${TARGET_SHA}`, enforce the mandatory affirmative confirmation gate, publish the draft release against `${TARGET_SHA}`, and initiate the post-release `VERSION` `-dev` bump Draft PR after user confirmation.
    *(Note: Never pass `--force`. If the tag already exists, abort and consult the user).*

@@ -176,13 +176,20 @@ Using the classified commits and the [Release Notes Taxonomy Reference](referenc
    Write the structured release notes to a dedicated markdown file:
    * Recommended path: `"${ARTIFACT_DIR:-/tmp}/release_notes_v<version>.md"`
    * Include the complete 4-section layout with flag instructions and narrative synthesis.
-3. **Interactive Review**:
-   Present the draft file path to the user for review. If the user requests adjustments (e.g. changing version number, tuning descriptions, or regrouping entries), use `replace_file_content` to update the markdown file. If the version number changes so that it differs from `git show "${TARGET_SHA}:VERSION"`, merge a corrective `chore(version): bump VERSION to <version>` PR into `main`, re-fetch `origin/main`, update `TARGET_SHA`, and re-run release verification before publishing.
+3. **Interactive Review & `VERSION` Bump Procedure**:
+   Present the draft file path to the user for review. If the user requests adjustments (e.g. changing version number, tuning descriptions, or regrouping entries), use `replace_file_content` to update the markdown file. If root `VERSION` at the target commit does not match the confirmed `<version>` (either because `origin/main` still carries a `-dev` version or because the version changed during review), obtain explicit user confirmation and open a Draft `chore(version): bump VERSION to <version>` PR per [XMC Create PR](../xmc_create_pr/SKILL.md). Once a maintainer merges it into `main`, re-run `git fetch origin main --tags`, update `target_sha` and `version` in `"${ARTIFACT_DIR:-/tmp}/release_state.json"`, and re-verify the new commit (if running via [XMC Release](../xmc_release/SKILL.md), restart from [Phase 1](../xmc_release/SKILL.md#phase-1-deploy-newest-main-to-nightly) before re-running `--dry-run` preflight).
 4. **Preflight Validation (`--dry-run`)**:
-   Ensure `origin/main` is up to date (`git fetch origin main --tags`) and that root `VERSION` at `${TARGET_SHA}` matches `<version>` (if `main` still carries a `-dev` or different version, merge a `chore(version): bump VERSION to <version>` PR first, re-fetch `origin/main`, and target that verified commit). Run non-mutating preflight validation with `--dry-run` to verify tag format, commit resolution, root `VERSION` matching `--tag`, tag availability on remote, and notes file readability prior to requesting user approval:
+   Ensure `origin/main` is up to date (`git fetch origin main --tags`) and that root `VERSION` at `${TARGET_SHA}` matches `<version>` (see step 3 above if a bump PR is needed). Run non-mutating preflight validation with `--dry-run` to verify tag format, commit resolution, root `VERSION` matching `--tag`, tag availability on remote, and notes file readability prior to requesting user approval (persisting `${TARGET_SHA}` and `<version>` to `${STATE_FILE}` when invoked standalone so step 6 pins the exact same commit):
    ```bash
    VERSION="<version>"
+   STATE_FILE="${ARTIFACT_DIR:-/tmp}/release_state.json"
+   if [[ -z "${TARGET_SHA:-}" && -f "${STATE_FILE}" ]]; then
+     TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}")
+   fi
    TARGET_SHA="${TARGET_SHA:-$(git rev-parse origin/main)}"
+   if [[ ! -f "${STATE_FILE}" ]]; then
+     jq -n --arg sha "${TARGET_SHA}" --arg v "${VERSION}" '{target_sha: $sha, version: $v}' > "${STATE_FILE}"
+   fi
    NOTES_FILE="${ARTIFACT_DIR:-/tmp}/release_notes_v${VERSION}.md"
    PYTHONPATH=. python3 ./tools/release/publish_release.py \
        --tag "${VERSION}" \
@@ -203,10 +210,14 @@ Using the classified commits and the [Release Notes Taxonomy Reference](referenc
 1. **Wait for Explicit User Approval**:
    Confirm that the user has explicitly approved both the **version number** and the **release notes content**.
 2. **Publish Release as GitHub Draft (Post-Approval Only)**:
-   Execute the release publishing tool with `--draft` and explicitly pin `--target-commit "${TARGET_SHA}"` to ensure the release tag points to the canonical verified main commit:
+   Execute the release publishing tool with `--draft` and explicitly pin `--target-commit "${TARGET_SHA}"` loaded from `${STATE_FILE}` to ensure the release tag points to the canonical verified main commit:
    ```bash
    VERSION="<version>"
-   TARGET_SHA="${TARGET_SHA:-$(git rev-parse origin/main)}"
+   STATE_FILE="${ARTIFACT_DIR:-/tmp}/release_state.json"
+   if [[ -z "${TARGET_SHA:-}" && -f "${STATE_FILE}" ]]; then
+     TARGET_SHA=$(jq -r '.target_sha // empty' "${STATE_FILE}")
+   fi
+   : "${TARGET_SHA:?Error: TARGET_SHA not set and not found in ${STATE_FILE}}"
    NOTES_FILE="${ARTIFACT_DIR:-/tmp}/release_notes_v${VERSION}.md"
    PYTHONPATH=. python3 ./tools/release/publish_release.py \
        --tag "${VERSION}" \
@@ -216,8 +227,8 @@ Using the classified commits and the [Release Notes Taxonomy Reference](referenc
    ```
    > [!NOTE]
    > Publishing as a draft gives the team a collaborative proofreading window (e.g. 1–2 hours) on GitHub Releases to review the changelog and propose adjustments before manually publishing it to the public. Omit `--draft` only if the user explicitly instructs to publish publicly immediately.
-3. **Confirm Publication & Required Post-Release `VERSION` Bump**:
-   Provide the user with the generated GitHub Release URL and confirm that the git tag was successfully pushed. Then immediately open and merge a follow-up PR bumping root `VERSION` to the next development version (e.g., `1.2.0` → `1.3.0-dev`; patch or major releases override the `-dev` base when cutting the release) so subsequent `main` builds do not stamp the bare released version.
+3. **Confirm Publication & Post-Release `VERSION` Bump**:
+   Provide the user with the generated GitHub Release URL and confirm that the git tag was successfully pushed. Then request explicit user confirmation to open a Draft `chore(version): bump VERSION to <next>-dev` PR (e.g., `1.2.0` → `1.3.0-dev`; patch or major releases override the `-dev` base when cutting the release) per [XMC Create PR](../xmc_create_pr/SKILL.md) so subsequent `main` builds do not stamp the bare released version. Treat the release as complete only once a maintainer merges that follow-up PR.
 4. **Draft to Public Promotion (Separate Post-Review Action)**:
    Once the collaborative proofreading window is complete and the user explicitly requests making the release public, promote the draft release:
    ```bash

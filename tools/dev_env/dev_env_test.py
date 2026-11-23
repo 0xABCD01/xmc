@@ -67,15 +67,20 @@ class DevEnvCliTest(unittest.TestCase):
         self.assertIn("dev_env 1.2.0-dev", version_stream.getvalue())
 
     def test_parser_version_fallback(self) -> None:
-        """Verifies --version falls back cleanly when VERSION cannot be read."""
+        """Verifies --version falls back cleanly without stderr noise when VERSION cannot be read."""
         fallback_stream = io.StringIO()
-        with patch("tools.common.workspace_status.read_version", side_effect=OSError("missing")):
+        err_stream = io.StringIO()
+        with (
+            patch("tools.common.workspace_status.read_version", side_effect=OSError("missing")),
+            patch("sys.stderr", err_stream),
+        ):
             fallback_parser = dev_env.create_parser()
         with self.assertRaises(SystemExit) as cm:
-            with patch("sys.stdout", fallback_stream):
+            with patch("sys.stdout", fallback_stream), patch("sys.stderr", err_stream):
                 fallback_parser.parse_args(["--version"])
         self.assertEqual(cm.exception.code, 0)
         self.assertIn("developer-build", fallback_stream.getvalue())
+        self.assertEqual(err_stream.getvalue(), "")
 
     def test_main_no_args_prints_help_and_exits(self) -> None:
         """Verifies running main with empty args prints help and exits cleanly."""
