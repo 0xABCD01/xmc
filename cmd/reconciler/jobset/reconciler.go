@@ -289,6 +289,9 @@ func (r *Reconciler) stoppingAwareDeletionUpdate(ctx context.Context, jobSet *v1
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch current work unit execution for JobSet %s/%s: %w", jobSet.Namespace, jobSet.Name, err)
 	}
+	if current == nil {
+		return update, nil
+	}
 	if current.GetStatus().GetState() != spb.WorkUnitStatus_STOPPING {
 		return update, nil
 	}
